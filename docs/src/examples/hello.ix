@@ -1,0 +1,15 @@
+# hello.ix
+# A basic example IX script
+
+agent Nova
+
+say "Hello! I’m your friendly AI assistant."
+
+remember name = "Nova"
+remember role = "Assistant"
+
+say "My name is"
+recall name
+
+say "My job is"
+recall role
