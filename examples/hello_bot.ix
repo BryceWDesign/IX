@@ -1,0 +1,13 @@
+agent HelloBot {
+on start {
+say "Hello, world!"
+}
+
+on ask "name" {
+say "I am HelloBot."
+}
+
+on ask "weather" {
+say "I don't know the weather, but I'm here to help!"
+}
+}
