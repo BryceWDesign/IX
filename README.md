@@ -94,3 +94,7 @@ MIT — Free to use, modify, and distribute. See LICENSE for full details.
 ⭐️ Show Some Love
 If this project excites you or inspires new ideas:
 Star the repo 🌟 | Share it 🔁 | Contribute 🔧 | Fork it 🍴
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
