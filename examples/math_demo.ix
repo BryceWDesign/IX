@@ -1,0 +1,11 @@
+let a = 10
+let b = 5
+let sum = a + b
+let diff = a - b
+let prod = a * b
+let quot = a / b
+
+print "Sum is " + sum
+print "Difference is " + diff
+print "Product is " + prod
+print "Quotient is " + quot
