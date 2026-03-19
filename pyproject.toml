@@ -1,0 +1,500 @@
+import io
+import tempfile
+import unittest
+from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
+from unittest.mock import patch
+
+from ix import __version__
+from ix.cli import main
+
+
+class TestIXCli(unittest.TestCase):
+    def test_version_command(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = main(["version"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), __version__)
+
+    def test_about_command(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = main(["about"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("canonical agent language", stdout.getvalue())
+
+    def test_tools_command(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = main(["tools"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("upper:", stdout.getvalue())
+        self.assertIn("concat:", stdout.getvalue())
+
+    def test_check_command_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shared_path = Path(temp_dir) / "shared.ix"
+            script_path = Path(temp_dir) / "valid.ix"
+
+            shared_path.write_text(
+                "export remember name = Bryce\n",
+                encoding="utf-8",
+            )
+            script_path.write_text(
+                'use "shared.ix"\nreply "Hello, {name}"\n',
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["check", str(script_path)])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Validation passed", stdout.getvalue())
+
+    def test_check_command_validation_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "invalid.ix"
+            script_path.write_text("call missing_tool()\n", encoding="utf-8")
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = main(["check", str(script_path)])
+
+        self.assertEqual(code, 4)
+        self.assertIn("IX validation error:", stderr.getvalue())
+        self.assertIn("Unknown built-in tool", stderr.getvalue())
+
+    def test_parse_command_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "hello.ix"
+            script_path.write_text("let answer = 42\nprint answer\n", encoding="utf-8")
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["parse", str(script_path)])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Parsed 2 statements and 0 agents", stdout.getvalue())
+
+    def test_format_command_prints_canonical_ix(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "natural.ix"
+            script_path.write_text(
+                (
+                    "agent Router\n"
+                    "    when user says anything:\n"
+                    '        reply "You said {input_text}"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["format", str(script_path)])
+
+        self.assertEqual(code, 0)
+        payload = stdout.getvalue()
+        self.assertIn("agent Router {", payload)
+        self.assertIn("on ask * {", payload)
+        self.assertIn('say "You said {input_text}"', payload)
+
+    def test_format_check_fails_for_noncanonical_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "natural.ix"
+            script_path.write_text(
+                (
+                    "agent Router\n"
+                    "    when user says anything:\n"
+                    '        reply "You said {input_text}"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = main(["format", str(script_path), "--check"])
+
+        self.assertEqual(code, 5)
+        self.assertIn("IX format error:", stderr.getvalue())
+        self.assertIn("not canonically formatted", stderr.getvalue())
+
+    def test_format_write_rewrites_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "natural.ix"
+            script_path.write_text(
+                (
+                    "agent Router\n"
+                    "    when user says anything:\n"
+                    '        reply "You said {input_text}"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["format", str(script_path), "--write"])
+
+            rewritten = script_path.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertIn("Formatted", stdout.getvalue())
+        self.assertIn("agent Router {", rewritten)
+        self.assertIn("on ask * {", rewritten)
+
+    def test_test_command_passes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "assertions.ix"
+            script_path.write_text(
+                (
+                    "remember name = Bryce\n"
+                    'assert name == "Bryce"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["test", str(script_path)])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Test passed", stdout.getvalue())
+
+    def test_test_command_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "assertions.ix"
+            script_path.write_text(
+                (
+                    "remember name = Bryce\n"
+                    'assert name == "Other"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = main(["test", str(script_path)])
+
+        self.assertEqual(code, 6)
+        self.assertIn("IX test failure:", stderr.getvalue())
+        self.assertIn("Assertion failed", stderr.getvalue())
+
+    def test_trace_command_outputs_structured_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "traceable.ix"
+            script_path.write_text(
+                (
+                    "remember name = Bryce\n"
+                    "call upper(name) -> loud_name\n"
+                    'assert loud_name == "BRYCE"\n'
+                    "repeat 2 {\n"
+                    "print loud_name\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["trace", str(script_path)])
+
+        self.assertEqual(code, 0)
+        payload = stdout.getvalue()
+        self.assertIn('"trace": [', payload)
+        self.assertIn('"kind": "tool"', payload)
+        self.assertIn('"kind": "assert"', payload)
+        self.assertIn('"kind": "repeat_iteration"', payload)
+
+    def test_chat_command_boots_and_handles_turns(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "echo.ix"
+            script_path.write_text(
+                (
+                    "agent Echo {\n"
+                    "on start {\n"
+                    'say "Ready."\n'
+                    "}\n"
+                    "\n"
+                    'on ask "hello {name:word}" {\n'
+                    'reply "Hello, {name}."\n'
+                    "}\n"
+                    "\n"
+                    "on ask * {\n"
+                    'reply "Echo: {input_text}"\n'
+                    "}\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            stdin = io.StringIO("hello Bryce\nquit\n")
+            stdout = io.StringIO()
+
+            with patch("sys.stdin", stdin), redirect_stdout(stdout):
+                code = main(["chat", str(script_path), "--agent", "Echo", "--boot"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            ["Ready.", "Hello, Bryce."],
+        )
+
+    def test_orchestrate_command_runs_multi_agent_workflow(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "workflow.ix"
+            script_path.write_text(
+                (
+                    "agent Alpha {\n"
+                    "on start {\n"
+                    'send "JOB 42" to Beta\n'
+                    "}\n"
+                    "\n"
+                    'on message "DONE {job_id:int}" {\n'
+                    'reply "ACK {job_id}"\n'
+                    "}\n"
+                    "}\n"
+                    "\n"
+                    "agent Beta {\n"
+                    'on message "JOB {job_id:int}" {\n'
+                    'reply "DONE {job_id}"\n'
+                    "}\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["orchestrate", str(script_path), "--max-rounds", "4"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip().splitlines(), ["DONE 42", "ACK 42"])
+
+    def test_run_command_supports_typed_template_handler_captures(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "greeter.ix"
+            script_path.write_text(
+                (
+                    "agent Greeter {\n"
+                    'on ask "job {job_id:int}" {\n'
+                    'reply "Job #{job_id}"\n'
+                    "}\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--agent",
+                        "Greeter",
+                        "--event",
+                        "ask",
+                        "--pattern",
+                        "job 42",
+                        "--input",
+                        "job 42",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "Job #42")
+
+    def test_run_command_supports_imported_script(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shared_path = Path(temp_dir) / "shared.ix"
+            root_path = Path(temp_dir) / "root.ix"
+
+            shared_path.write_text(
+                (
+                    "export remember name = Bryce\n"
+                    "remember secret = Hidden\n"
+                ),
+                encoding="utf-8",
+            )
+            root_path.write_text(
+                'use "shared.ix"\nreply "Hello, {name}!"\n',
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["run", str(root_path)])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "Hello, Bryce!")
+
+    def test_run_command_supports_wildcard_handler_and_input(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "router.ix"
+            script_path.write_text(
+                (
+                    "agent Router\n"
+                    "    when user says anything:\n"
+                    '        reply "You said: {input_text}"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--agent",
+                        "Router",
+                        "--event",
+                        "ask",
+                        "--pattern",
+                        "fallback",
+                        "--input",
+                        "Tell me something useful",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "You said: Tell me something useful")
+
+    def test_run_command_persists_agent_state_with_session_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "memory_bot.ix"
+            session_path = Path(temp_dir) / "session.json"
+
+            script_path.write_text(
+                (
+                    "agent MemoryBot {\n"
+                    "on start {\n"
+                    "remember name = Bryce\n"
+                    "}\n"
+                    "\n"
+                    'on ask "who" {\n'
+                    "recall name\n"
+                    "}\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            start_stdout = io.StringIO()
+            with redirect_stdout(start_stdout):
+                start_code = main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--agent",
+                        "MemoryBot",
+                        "--event",
+                        "start",
+                        "--session-file",
+                        str(session_path),
+                    ]
+                )
+
+            ask_stdout = io.StringIO()
+            with redirect_stdout(ask_stdout):
+                ask_code = main(
+                    [
+                        "run",
+                        str(script_path),
+                        "--agent",
+                        "MemoryBot",
+                        "--event",
+                        "ask",
+                        "--pattern",
+                        "who",
+                        "--session-file",
+                        str(session_path),
+                    ]
+                )
+
+        self.assertEqual(start_code, 0)
+        self.assertEqual(ask_code, 0)
+        self.assertEqual(start_stdout.getvalue().strip(), "")
+        self.assertEqual(ask_stdout.getvalue().strip(), "Bryce")
+
+    def test_run_command_with_natural_style_script(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "natural.ix"
+            script_path.write_text(
+                (
+                    "define name\n"
+                    "set name to Bryce\n"
+                    "loop 2:\n"
+                    '    reply "Hello, {name}!"\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["run", str(script_path)])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            stdout.getvalue().strip().splitlines(),
+            ["Hello, Bryce!", "Hello, Bryce!"],
+        )
+
+    def test_run_command_with_tool_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "tooling.ix"
+            script_path.write_text(
+                (
+                    "remember name = Bryce\n"
+                    "call upper(name) -> loud_name\n"
+                    'call concat("Hello, ", loud_name)\n'
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["run", str(script_path)])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "Hello, BRYCE")
+
+    def test_run_command_with_repeat_loop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "repeat.ix"
+            script_path.write_text(
+                (
+                    "repeat 3 {\n"
+                    "print loop_index\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = main(["run", str(script_path)])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip().splitlines(), ["0", "1", "2"])
+
+    def test_run_command_validation_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script_path = Path(temp_dir) / "broken.ix"
+            script_path.write_text("call missing_tool()\n", encoding="utf-8")
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = main(["run", str(script_path)])
+
+        self.assertEqual(code, 4)
+        self.assertIn("IX validation error:", stderr.getvalue())
+        self.assertIn("Unknown built-in tool", stderr.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()
