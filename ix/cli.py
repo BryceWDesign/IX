@@ -19,7 +19,8 @@ from .version import __version__
 
 _ABOUT_TEXT = (
     "IX is becoming a canonical agent language and runtime platform.\n"
-    "This CLI exposes the first executable contract-language commands: check, run, and trace.\n"
+    "This CLI exposes executable contract-language commands for checking, running, "
+    "tracing, testing, and orchestrating IX programs.\n"
     "The current scope is experimental, audit-first, and intentionally conservative."
 )
 
@@ -53,6 +54,13 @@ def build_parser() -> argparse.ArgumentParser:
     test_parser = subparsers.add_parser("test", help="Run IX assertions and validation checks")
     _add_execution_arguments(test_parser)
 
+    orchestrate_parser = subparsers.add_parser(
+        "orchestrate",
+        help="Run a multi-agent IX workflow and print handoff evidence",
+    )
+    _add_execution_arguments(orchestrate_parser)
+    orchestrate_parser.add_argument("--json", action="store_true", help="Emit full JSON result")
+
     return parser
 
 
@@ -84,6 +92,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "test":
         return _test_command(args)
+
+    if args.command == "orchestrate":
+        return _orchestrate_command(args)
 
     parser.print_help(sys.stderr)
     return 1
@@ -178,6 +189,31 @@ def _test_command(args: argparse.Namespace) -> int:
 
     assertion_count = sum(1 for event in result.trace if event.kind == "assert")
     print(f"PASS: {assertion_count} assertion(s), {len(result.trace)} trace event(s)")
+    return 0
+
+
+def _orchestrate_command(args: argparse.Namespace) -> int:
+    if args.agent is None:
+        print("IX orchestrate failed: --agent is required for orchestration", file=sys.stderr)
+        return 2
+
+    try:
+        _, result = _execute(args)
+    except (OSError, IXError, ValueError) as error:
+        print(f"IX orchestrate failed: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        return 0
+
+    print(f"ORCHESTRATION COMPLETE: {len(result.handoffs)} handoff(s)")
+    for handoff in result.handoffs:
+        target = f"{handoff['target_agent']}.{handoff['target_event']}"
+        output_name = handoff["output_name"] or "<unassigned>"
+        print(f"HANDOFF {target} -> {output_name}: {handoff['output_value']}")
+    for reply in result.replies:
+        print(reply)
     return 0
 
 
