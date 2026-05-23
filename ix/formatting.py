@@ -14,6 +14,7 @@ from .ast import (
     RememberStatement,
     ReplyStatement,
     RequireApprovalStatement,
+    SendStatement,
     Statement,
     ToolCallStatement,
     TraceStatement,
@@ -76,6 +77,17 @@ class IXFormatter:
 
         if isinstance(statement, ToolCallStatement):
             line = f"{prefix}call {statement.tool_name}"
+            if statement.output_name is not None:
+                line = f"{line} as {statement.output_name}"
+            if statement.arguments:
+                arguments = ", ".join(
+                    f"{argument.name} = {argument.expression}" for argument in statement.arguments
+                )
+                line = f"{line} with {arguments}"
+            return [line]
+
+        if isinstance(statement, SendStatement):
+            line = f"{prefix}send {statement.target_agent}.{statement.target_event}"
             if statement.output_name is not None:
                 line = f"{line} as {statement.output_name}"
             if statement.arguments:
