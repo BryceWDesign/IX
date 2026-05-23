@@ -93,6 +93,14 @@ class ToolCallStatement(Statement):
 
 
 @dataclass(frozen=True)
+class SendStatement(Statement):
+    target_agent: str
+    target_event: str
+    output_name: str | None = None
+    arguments: tuple[ToolArgument, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class OnBlock(Statement):
     event: str
     statements: tuple[Statement, ...] = field(default_factory=tuple)
