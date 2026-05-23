@@ -1,9 +1,9 @@
 """Canonical parser for the IX language.
 
 The parser is intentionally conservative. It accepts the executable language core
-that the runtime supports, plus agent/event/policy/tool structures needed for
-IX's evidence-bound agent contract direction. Unsupported lines fail closed with
-a clear syntax error instead of being silently ignored.
+that the runtime supports, plus agent/event/policy/tool/handoff structures needed
+for IX's evidence-bound agent contract direction. Unsupported lines fail closed
+with a clear syntax error instead of being silently ignored.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from .ast import (
     RememberStatement,
     ReplyStatement,
     RequireApprovalStatement,
+    SendStatement,
     Statement,
     ToolArgument,
     ToolCallStatement,
@@ -42,6 +43,11 @@ _POLICY = re.compile(
 _REQUIRE_APPROVAL = re.compile(r"^require\s+human_approval(?:\s+reason\s+(?P<reason>.+))?$")
 _TOOL_CALL = re.compile(
     r"^call\s+(?P<tool>[A-Za-z_][A-Za-z0-9_.:-]*)"
+    r"(?:\s+as\s+(?P<output>[A-Za-z_][A-Za-z0-9_]*))?"
+    r"(?:\s+with\s+(?P<arguments>.+))?$"
+)
+_SEND = re.compile(
+    r"^send\s+(?P<agent>[A-Za-z_][A-Za-z0-9_-]*)\.(?P<event>[A-Za-z_][A-Za-z0-9_.:-]*)"
     r"(?:\s+as\s+(?P<output>[A-Za-z_][A-Za-z0-9_]*))?"
     r"(?:\s+with\s+(?P<arguments>.+))?$"
 )
@@ -130,9 +136,20 @@ class IXParser:
         if text.startswith("trace "):
             return TraceStatement(span=span, message=self._required_tail(text, "trace", current))
 
+        send_match = _SEND.match(text)
+        if send_match:
+            arguments = self._parse_named_arguments(send_match.group("arguments") or "", current)
+            return SendStatement(
+                span=span,
+                target_agent=send_match.group("agent"),
+                target_event=send_match.group("event"),
+                output_name=send_match.group("output"),
+                arguments=tuple(arguments),
+            )
+
         tool_match = _TOOL_CALL.match(text)
         if tool_match:
-            arguments = self._parse_tool_arguments(tool_match.group("arguments") or "", current)
+            arguments = self._parse_named_arguments(tool_match.group("arguments") or "", current)
             return ToolCallStatement(
                 span=span,
                 tool_name=tool_match.group("tool"),
@@ -171,7 +188,7 @@ class IXParser:
             raise self._syntax(f"Expected value for {keyword} assignment", line)
         return name, expression
 
-    def _parse_tool_arguments(self, raw: str, line: _LogicalLine) -> list[ToolArgument]:
+    def _parse_named_arguments(self, raw: str, line: _LogicalLine) -> list[ToolArgument]:
         if not raw.strip():
             return []
 
@@ -179,7 +196,7 @@ class IXParser:
         for segment in self._split_commas(raw):
             match = _ASSIGNMENT.match(segment.strip())
             if not match:
-                raise self._syntax("Expected tool argument in the form name = value", line)
+                raise self._syntax("Expected argument in the form name = value", line)
             arguments.append(
                 ToolArgument(
                     name=match.group("name"),
