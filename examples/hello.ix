@@ -1,0 +1,4 @@
+trace "hello example started"
+let name = "IX"
+reply "Hello from {name}"
+assert name == "IX"
