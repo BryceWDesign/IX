@@ -76,7 +76,7 @@ class ExecutionResult:
 
     status: str
     variables: dict[str, Any] = field(default_factory=dict)
-    memory: dict[str, Any] = field(default_factory=list)
+    memory: dict[str, Any] = field(default_factory=dict)
     outputs: list[str] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
     approvals_required: list[str] = field(default_factory=list)
@@ -85,10 +85,6 @@ class ExecutionResult:
     handoffs: list[dict[str, Any]] = field(default_factory=list)
     branches: list[dict[str, Any]] = field(default_factory=list)
     trace: list[TraceEvent] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.memory, dict):
-            self.memory = {}
 
     def trace_as_dicts(self) -> list[dict[str, Any]]:
         """Return the trace ledger in JSON-serializable form."""
