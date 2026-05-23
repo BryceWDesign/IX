@@ -7,7 +7,7 @@ This roadmap outlines current priorities and future milestones for the IX langua
 ## ✅ Completed
 - Language concept and syntax
 - Initial grammar and parser (Python)
-- First agent example (`hello_bot.ix`)
+- Canonical examples (`hello.ix`, `branching_review.ix`, and `multi_agent_review.ix`)
 - CI setup with GitHub Actions
 - Project documentation: spec, design
 
