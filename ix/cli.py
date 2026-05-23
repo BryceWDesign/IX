@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import IXError
+from .formatting import format_ix
 from .parser import parse_ix
 from .runtime import IXRuntime
 from .validator import validate_ix
@@ -38,11 +39,19 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check", help="Parse and validate an IX file")
     check_parser.add_argument("file", help="Path to the .ix file to check")
 
+    format_parser = subparsers.add_parser("format", help="Format an IX file")
+    format_parser.add_argument("file", help="Path to the .ix file to format")
+    format_parser.add_argument("--check", action="store_true", help="Fail if formatting would change")
+    format_parser.add_argument("--write", action="store_true", help="Rewrite the file in place")
+
     run_parser = subparsers.add_parser("run", help="Run an IX file")
     _add_execution_arguments(run_parser)
 
     trace_parser = subparsers.add_parser("trace", help="Run an IX file and emit JSON trace output")
     _add_execution_arguments(trace_parser)
+
+    test_parser = subparsers.add_parser("test", help="Run IX assertions and validation checks")
+    _add_execution_arguments(test_parser)
 
     return parser
 
@@ -64,11 +73,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "check":
         return _check_command(args.file)
 
+    if args.command == "format":
+        return _format_command(args)
+
     if args.command == "run":
         return _run_command(args)
 
     if args.command == "trace":
         return _trace_command(args)
+
+    if args.command == "test":
+        return _test_command(args)
 
     parser.print_help(sys.stderr)
     return 1
@@ -104,6 +119,31 @@ def _check_command(file_path: str) -> int:
     return 0
 
 
+def _format_command(args: argparse.Namespace) -> int:
+    try:
+        source_path, program = _load_program(args.file)
+        original = source_path.read_text(encoding="utf-8")
+        formatted = format_ix(program)
+    except (OSError, IXError) as error:
+        print(f"IX format failed: {error}", file=sys.stderr)
+        return 2
+
+    if args.check:
+        if original == formatted:
+            print(f"OK: {source_path}")
+            return 0
+        print(f"IX format check failed: {source_path} is not formatted", file=sys.stderr)
+        return 2
+
+    if args.write:
+        source_path.write_text(formatted, encoding="utf-8")
+        print(f"Formatted: {source_path}")
+        return 0
+
+    print(formatted, end="")
+    return 0
+
+
 def _run_command(args: argparse.Namespace) -> int:
     try:
         _, result = _execute(args)
@@ -126,6 +166,18 @@ def _trace_command(args: argparse.Namespace) -> int:
         return 2
 
     print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _test_command(args: argparse.Namespace) -> int:
+    try:
+        _, result = _execute(args)
+    except (OSError, IXError, ValueError) as error:
+        print(f"IX test failed: {error}", file=sys.stderr)
+        return 2
+
+    assertion_count = sum(1 for event in result.trace if event.kind == "assert")
+    print(f"PASS: {assertion_count} assertion(s), {len(result.trace)} trace event(s)")
     return 0
 
 
