@@ -9,6 +9,7 @@ from typing import Any, Literal
 from .ast import (
     AgentBlock,
     AssertStatement,
+    IfStatement,
     OnBlock,
     PolicyStatement,
     Program,
@@ -121,6 +122,16 @@ class AssuranceAnalyzer:
         checks.extend(self._check_tool_policies(program))
         checks.extend(self._check_handoff_targets(program))
 
+        if metrics["conditions"] > 0:
+            checks.append(
+                AssuranceCheck(
+                    "conditions.present",
+                    "pass",
+                    "Program contains explicit conditional decision logic.",
+                    {"conditions": metrics["conditions"]},
+                )
+            )
+
         if metrics["assertions"] == 0:
             checks.append(
                 AssuranceCheck(
@@ -197,6 +208,7 @@ class AssuranceAnalyzer:
             "approvals_required": 0,
             "assertions": 0,
             "trace_statements": 0,
+            "conditions": 0,
         }
         self._collect_metrics(program.statements, metrics, top_level=True)
         metrics["executable_paths"] = metrics["events"] + metrics["top_level_statements"]
@@ -235,17 +247,26 @@ class AssuranceAnalyzer:
                 metrics["assertions"] += 1
             elif isinstance(statement, TraceStatement):
                 metrics["trace_statements"] += 1
+            elif isinstance(statement, IfStatement):
+                metrics["conditions"] += 1
+                self._collect_metrics(statement.then_statements, metrics, top_level=False)
+                self._collect_metrics(statement.else_statements, metrics, top_level=False)
 
     def _check_tool_policies(self, program: Program) -> list[AssuranceCheck]:
         checks: list[AssuranceCheck] = []
-        self._check_tool_policies_in_scope(program.statements, "top-level", checks)
+        self._check_tool_policies_in_scope(program.statements, "top-level", checks, inherited_policies=())
 
         for statement in program.statements:
             if isinstance(statement, AgentBlock):
                 for child in statement.statements:
                     if isinstance(child, OnBlock):
                         scope = f"{statement.name}.{child.event}"
-                        self._check_tool_policies_in_scope(child.statements, scope, checks)
+                        self._check_tool_policies_in_scope(
+                            child.statements,
+                            scope,
+                            checks,
+                            inherited_policies=(),
+                        )
 
         if not any(check.check_id.startswith("tool_policy") for check in checks):
             checks.append(
@@ -263,43 +284,68 @@ class AssuranceAnalyzer:
         statements: tuple[Statement, ...],
         scope: str,
         checks: list[AssuranceCheck],
+        *,
+        inherited_policies: tuple[PolicyStatement, ...],
     ) -> None:
-        policies = tuple(statement for statement in statements if isinstance(statement, PolicyStatement))
+        local_policies = tuple(statement for statement in statements if isinstance(statement, PolicyStatement))
+        policies = inherited_policies + local_policies
 
         for statement in statements:
-            if not isinstance(statement, ToolCallStatement):
+            if isinstance(statement, ToolCallStatement):
+                self._check_one_tool_policy(statement, policies, scope, checks)
                 continue
 
-            if statement.tool_name not in self.tool_registry.names():
-                checks.append(
-                    AssuranceCheck(
-                        "tool_policy.unknown_tool",
-                        "fail",
-                        f"Unknown tool `{statement.tool_name}` in scope `{scope}`.",
-                        {"scope": scope, "tool": statement.tool_name},
-                    )
+            if isinstance(statement, IfStatement):
+                self._check_tool_policies_in_scope(
+                    statement.then_statements,
+                    f"{scope}.if_then",
+                    checks,
+                    inherited_policies=policies,
                 )
-                continue
+                self._check_tool_policies_in_scope(
+                    statement.else_statements,
+                    f"{scope}.if_else",
+                    checks,
+                    inherited_policies=policies,
+                )
 
-            decision = self._tool_policy_decision(statement.tool_name, policies)
-            if decision["effect"] != "allow":
-                checks.append(
-                    AssuranceCheck(
-                        "tool_policy.not_allowed",
-                        "fail",
-                        f"Tool `{statement.tool_name}` is not explicitly allowed in scope `{scope}`.",
-                        {"scope": scope, "tool": statement.tool_name, "decision": decision},
-                    )
+    def _check_one_tool_policy(
+        self,
+        statement: ToolCallStatement,
+        policies: tuple[PolicyStatement, ...],
+        scope: str,
+        checks: list[AssuranceCheck],
+    ) -> None:
+        if statement.tool_name not in self.tool_registry.names():
+            checks.append(
+                AssuranceCheck(
+                    "tool_policy.unknown_tool",
+                    "fail",
+                    f"Unknown tool `{statement.tool_name}` in scope `{scope}`.",
+                    {"scope": scope, "tool": statement.tool_name},
                 )
-            else:
-                checks.append(
-                    AssuranceCheck(
-                        "tool_policy.allowed",
-                        "pass",
-                        f"Tool `{statement.tool_name}` is explicitly allowed in scope `{scope}`.",
-                        {"scope": scope, "tool": statement.tool_name, "decision": decision},
-                    )
+            )
+            return
+
+        decision = self._tool_policy_decision(statement.tool_name, policies)
+        if decision["effect"] != "allow":
+            checks.append(
+                AssuranceCheck(
+                    "tool_policy.not_allowed",
+                    "fail",
+                    f"Tool `{statement.tool_name}` is not explicitly allowed in scope `{scope}`.",
+                    {"scope": scope, "tool": statement.tool_name, "decision": decision},
                 )
+            )
+        else:
+            checks.append(
+                AssuranceCheck(
+                    "tool_policy.allowed",
+                    "pass",
+                    f"Tool `{statement.tool_name}` is explicitly allowed in scope `{scope}`.",
+                    {"scope": scope, "tool": statement.tool_name, "decision": decision},
+                )
+            )
 
     def _check_handoff_targets(self, program: Program) -> list[AssuranceCheck]:
         checks: list[AssuranceCheck] = []
@@ -364,6 +410,9 @@ class AssuranceAnalyzer:
                 found.append(statement)
             elif isinstance(statement, AgentBlock | OnBlock):
                 found.extend(self._send_statements(statement.statements))
+            elif isinstance(statement, IfStatement):
+                found.extend(self._send_statements(statement.then_statements))
+                found.extend(self._send_statements(statement.else_statements))
 
         return found
 
@@ -399,6 +448,7 @@ class AssuranceAnalyzer:
                 "replies": len(result.replies),
                 "handoffs": len(result.handoffs),
                 "tool_results": len(result.tool_results),
+                "branches": len(result.branches),
             },
         )
 
