@@ -28,6 +28,7 @@ from .ast import (
     RememberStatement,
     ReplyStatement,
     RequireApprovalStatement,
+    SendStatement,
     Statement,
     ToolCallStatement,
     TraceStatement,
@@ -80,6 +81,7 @@ class ExecutionResult:
     approvals_required: list[str] = field(default_factory=list)
     policies: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    handoffs: list[dict[str, Any]] = field(default_factory=list)
     trace: list[TraceEvent] = field(default_factory=list)
 
     def trace_as_dicts(self) -> list[dict[str, Any]]:
@@ -99,6 +101,7 @@ class ExecutionResult:
             "approvals_required": list(self.approvals_required),
             "policies": list(self.policies),
             "tool_results": list(self.tool_results),
+            "handoffs": list(self.handoffs),
             "trace": self.trace_as_dicts(),
         }
 
@@ -182,8 +185,14 @@ class SafeExpressionEvaluator:
 class IXRuntime:
     """Execute canonical IX programs with structured trace output."""
 
-    def __init__(self, *, tool_registry: BuiltInToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        tool_registry: BuiltInToolRegistry | None = None,
+        max_handoff_depth: int = 8,
+    ) -> None:
         self.tool_registry = tool_registry or BuiltInToolRegistry()
+        self.max_handoff_depth = max_handoff_depth
 
     def run(
         self,
@@ -201,16 +210,25 @@ class IXRuntime:
         result = ExecutionResult(status="running")
         values: dict[str, Any] = dict(inputs or {})
         statements = self._select_statements(program, agent=agent, event=event)
-        policy_index = self._collect_policies(statements)
         self._emit(result, "run.start", "IX execution started", program.span)
-
-        for statement in statements:
-            self._execute_statement(statement, values, result, policy_index)
-
+        self._run_statements(program, statements, values, result, depth=0)
         result.variables = dict(values)
         result.status = "completed"
         self._emit(result, "run.complete", "IX execution completed", program.span)
         return result
+
+    def _run_statements(
+        self,
+        program: Program,
+        statements: tuple[Statement, ...],
+        values: dict[str, Any],
+        result: ExecutionResult,
+        *,
+        depth: int,
+    ) -> None:
+        policy_index = self._collect_policies(statements)
+        for statement in statements:
+            self._execute_statement(statement, values, result, policy_index, program, depth=depth)
 
     def _select_statements(
         self,
@@ -250,6 +268,9 @@ class IXRuntime:
         values: dict[str, Any],
         result: ExecutionResult,
         policy_index: tuple[PolicyStatement, ...],
+        program: Program,
+        *,
+        depth: int,
     ) -> None:
         evaluator = SafeExpressionEvaluator({**result.memory, **values})
 
@@ -323,7 +344,87 @@ class IXRuntime:
             self._execute_tool_call(statement, evaluator, values, result, policy_index)
             return
 
+        if isinstance(statement, SendStatement):
+            self._execute_send(statement, evaluator, values, result, program, depth=depth)
+            return
+
         raise IXRuntimeError(f"Unsupported runtime statement: {type(statement).__name__}")
+
+    def _execute_send(
+        self,
+        statement: SendStatement,
+        evaluator: SafeExpressionEvaluator,
+        values: dict[str, Any],
+        result: ExecutionResult,
+        program: Program,
+        *,
+        depth: int,
+    ) -> None:
+        if depth >= self.max_handoff_depth:
+            raise IXRuntimeError("Maximum IX agent handoff depth exceeded")
+
+        arguments = {
+            argument.name: self._evaluate_argument(argument.expression, evaluator)
+            for argument in statement.arguments
+        }
+        before_reply_count = len(result.replies)
+        before_output_count = len(result.outputs)
+        target = f"{statement.target_agent}.{statement.target_event}"
+        target_statements = self._select_statements(
+            program,
+            agent=statement.target_agent,
+            event=statement.target_event,
+        )
+
+        self._emit(
+            result,
+            "handoff.start",
+            f"Sending control to {target}",
+            statement.span,
+            target_agent=statement.target_agent,
+            target_event=statement.target_event,
+            arguments=arguments,
+        )
+        child_values = dict(arguments)
+        self._run_statements(program, target_statements, child_values, result, depth=depth + 1)
+        produced_replies = result.replies[before_reply_count:]
+        produced_outputs = result.outputs[before_output_count:]
+        output_value = self._handoff_output_value(produced_replies, produced_outputs, child_values)
+
+        if statement.output_name is not None:
+            values[statement.output_name] = output_value
+
+        handoff = {
+            "target_agent": statement.target_agent,
+            "target_event": statement.target_event,
+            "arguments": arguments,
+            "output_name": statement.output_name,
+            "output_value": output_value,
+            "replies": produced_replies,
+            "outputs": produced_outputs,
+        }
+        result.handoffs.append(handoff)
+        self._emit(
+            result,
+            "handoff.complete",
+            f"Returned from {target}",
+            statement.span,
+            **handoff,
+        )
+
+    def _handoff_output_value(
+        self,
+        produced_replies: list[str],
+        produced_outputs: list[str],
+        child_values: dict[str, Any],
+    ) -> Any:
+        if produced_replies:
+            return produced_replies[-1]
+        if produced_outputs:
+            return produced_outputs[-1]
+        if "result" in child_values:
+            return child_values["result"]
+        return "completed"
 
     def _execute_tool_call(
         self,
