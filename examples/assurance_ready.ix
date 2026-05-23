@@ -1,0 +1,8 @@
+trace "assurance-ready example started"
+if score >= 80 {
+    reply "score accepted"
+} else {
+    reply "score requires review"
+}
+assert score >= 0
+require human_approval reason "Reviewer must approve before operational use"
