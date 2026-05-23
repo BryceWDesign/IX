@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .assurance import AssuranceAnalyzer
 from .errors import IXError
 from .evidence import EvidenceBundleWriter
 from .formatting import format_ix
@@ -21,7 +22,8 @@ from .version import __version__
 _ABOUT_TEXT = (
     "IX is becoming a canonical agent language and runtime platform.\n"
     "This CLI exposes executable contract-language commands for checking, running, "
-    "tracing, testing, orchestrating, and exporting IX evidence bundles.\n"
+    "tracing, testing, orchestrating, exporting evidence bundles, and producing "
+    "bounded assurance reports.\n"
     "The current scope is experimental, audit-first, and intentionally conservative."
 )
 
@@ -73,6 +75,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory for the evidence bundle",
     )
 
+    assure_parser = subparsers.add_parser(
+        "assure",
+        help="Assess an IX file for bounded evidence-readiness checks",
+    )
+    _add_execution_arguments(assure_parser)
+    assure_parser.add_argument(
+        "--profile",
+        default="experimental-local",
+        help="Assurance profile label to place in the report",
+    )
+    assure_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Also execute the selected entry point and include runtime pass/fail evidence",
+    )
+    assure_parser.add_argument("--json", action="store_true", help="Emit JSON assurance report")
+
     return parser
 
 
@@ -110,6 +129,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "evidence":
         return _evidence_command(args)
+
+    if args.command == "assure":
+        return _assure_command(args)
 
     parser.print_help(sys.stderr)
     return 1
@@ -158,6 +180,7 @@ def _format_command(args: argparse.Namespace) -> int:
         if original == formatted:
             print(f"OK: {source_path}")
             return 0
+
         print(f"IX format check failed: {source_path} is not formatted", file=sys.stderr)
         return 2
 
@@ -179,8 +202,10 @@ def _run_command(args: argparse.Namespace) -> int:
 
     for output in result.outputs:
         print(output)
+
     for reply in result.replies:
         print(reply)
+
     return 0
 
 
@@ -227,8 +252,10 @@ def _orchestrate_command(args: argparse.Namespace) -> int:
         target = f"{handoff['target_agent']}.{handoff['target_event']}"
         output_name = handoff["output_name"] or "<unassigned>"
         print(f"HANDOFF {target} -> {output_name}: {handoff['output_value']}")
+
     for reply in result.replies:
         print(reply)
+
     return 0
 
 
@@ -248,7 +275,35 @@ def _evidence_command(args: argparse.Namespace) -> int:
     print(f"EVIDENCE BUNDLE WRITTEN: {bundle.output_dir}")
     for relative_file in bundle.relative_files():
         print(f"- {relative_file}")
+
     return 0
+
+
+def _assure_command(args: argparse.Namespace) -> int:
+    try:
+        _, program = _load_program(args.file)
+        inputs = _parse_inputs(args.input)
+        report = AssuranceAnalyzer().assess(
+            program,
+            profile=args.profile,
+            execute=args.execute,
+            agent=args.agent,
+            event=args.event,
+            inputs=inputs,
+        )
+    except (OSError, IXError, ValueError) as error:
+        print(f"IX assure failed: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"ASSURANCE {report.status.upper()}: {args.file}")
+        print(f"PROFILE: {report.profile}")
+        for check in report.checks:
+            print(f"[{check.severity.upper()}] {check.check_id}: {check.message}")
+
+    return 2 if report.status == "fail" else 0
 
 
 def _execute(args: argparse.Namespace):
@@ -275,12 +330,16 @@ def _parse_inputs(raw_inputs: list[str]) -> dict[str, Any]:
     for raw_input in raw_inputs:
         if "=" not in raw_input:
             raise ValueError(f"Expected input in NAME=VALUE form: {raw_input!r}")
+
         name, raw_value = raw_input.split("=", 1)
         name = name.strip()
+
         if not name:
             raise ValueError("Input name cannot be empty")
+
         if not name.replace("_", "a").isalnum() or name[0].isdigit():
             raise ValueError(f"Invalid input name: {name!r}")
+
         parsed[name] = _parse_input_value(raw_value.strip())
 
     return parsed
@@ -288,10 +347,13 @@ def _parse_inputs(raw_inputs: list[str]) -> dict[str, Any]:
 
 def _parse_input_value(raw_value: str) -> Any:
     lowered = raw_value.lower()
+
     if lowered == "true":
         return True
+
     if lowered == "false":
         return False
+
     if lowered == "null":
         return None
 
