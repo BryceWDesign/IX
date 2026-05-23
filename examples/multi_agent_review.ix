@@ -1,0 +1,16 @@
+agent Coordinator {
+    on start {
+        trace "coordinator started"
+        send Reviewer.review as verdict with item = "agent behavior contract"
+        reply "Final verdict: {verdict}"
+        assert verdict == "approved: agent behavior contract"
+        require human_approval reason "Human reviewer must approve final operational use"
+    }
+}
+
+agent Reviewer {
+    on review {
+        trace "reviewer received item"
+        reply "approved: {item}"
+    }
+}
