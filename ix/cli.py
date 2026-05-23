@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import IXError
+from .evidence import EvidenceBundleWriter
 from .formatting import format_ix
 from .parser import parse_ix
 from .runtime import IXRuntime
@@ -20,7 +21,7 @@ from .version import __version__
 _ABOUT_TEXT = (
     "IX is becoming a canonical agent language and runtime platform.\n"
     "This CLI exposes executable contract-language commands for checking, running, "
-    "tracing, testing, and orchestrating IX programs.\n"
+    "tracing, testing, orchestrating, and exporting IX evidence bundles.\n"
     "The current scope is experimental, audit-first, and intentionally conservative."
 )
 
@@ -61,6 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_execution_arguments(orchestrate_parser)
     orchestrate_parser.add_argument("--json", action="store_true", help="Emit full JSON result")
 
+    evidence_parser = subparsers.add_parser(
+        "evidence",
+        help="Run an IX file and write a reviewable evidence bundle",
+    )
+    _add_execution_arguments(evidence_parser)
+    evidence_parser.add_argument(
+        "--out",
+        default="ix-evidence-bundle",
+        help="Output directory for the evidence bundle",
+    )
+
     return parser
 
 
@@ -95,6 +107,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "orchestrate":
         return _orchestrate_command(args)
+
+    if args.command == "evidence":
+        return _evidence_command(args)
 
     parser.print_help(sys.stderr)
     return 1
@@ -157,7 +172,7 @@ def _format_command(args: argparse.Namespace) -> int:
 
 def _run_command(args: argparse.Namespace) -> int:
     try:
-        _, result = _execute(args)
+        _, _, result = _execute(args)
     except (OSError, IXError, ValueError) as error:
         print(f"IX run failed: {error}", file=sys.stderr)
         return 2
@@ -171,7 +186,7 @@ def _run_command(args: argparse.Namespace) -> int:
 
 def _trace_command(args: argparse.Namespace) -> int:
     try:
-        _, result = _execute(args)
+        _, _, result = _execute(args)
     except (OSError, IXError, ValueError) as error:
         print(f"IX trace failed: {error}", file=sys.stderr)
         return 2
@@ -182,7 +197,7 @@ def _trace_command(args: argparse.Namespace) -> int:
 
 def _test_command(args: argparse.Namespace) -> int:
     try:
-        _, result = _execute(args)
+        _, _, result = _execute(args)
     except (OSError, IXError, ValueError) as error:
         print(f"IX test failed: {error}", file=sys.stderr)
         return 2
@@ -198,7 +213,7 @@ def _orchestrate_command(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        _, result = _execute(args)
+        _, _, result = _execute(args)
     except (OSError, IXError, ValueError) as error:
         print(f"IX orchestrate failed: {error}", file=sys.stderr)
         return 2
@@ -217,8 +232,27 @@ def _orchestrate_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _evidence_command(args: argparse.Namespace) -> int:
+    try:
+        source_path, _, result = _execute(args)
+        bundle = EvidenceBundleWriter().write_bundle(
+            result,
+            source_file=source_path,
+            output_dir=Path(args.out),
+            command="evidence",
+        )
+    except (OSError, IXError, ValueError) as error:
+        print(f"IX evidence failed: {error}", file=sys.stderr)
+        return 2
+
+    print(f"EVIDENCE BUNDLE WRITTEN: {bundle.output_dir}")
+    for relative_file in bundle.relative_files():
+        print(f"- {relative_file}")
+    return 0
+
+
 def _execute(args: argparse.Namespace):
-    _, program = _load_program(args.file)
+    source_path, program = _load_program(args.file)
     inputs = _parse_inputs(args.input)
     result = IXRuntime().run(
         program,
@@ -226,7 +260,7 @@ def _execute(args: argparse.Namespace):
         event=args.event,
         inputs=inputs,
     )
-    return program, result
+    return source_path, program, result
 
 
 def _load_program(file_path: str):
