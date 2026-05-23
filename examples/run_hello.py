@@ -1,14 +1,23 @@
-# examples/run_hello.py
+"""Run the canonical hello.ix example through the IX CLI."""
 
-from src.parser import parse_ix
-from src.runtime import Agent
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def main() -> int:
+    """Execute examples/hello.ix from a source checkout."""
+
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    from ix.cli import main as ix_main
+
+    return ix_main(["run", str(REPO_ROOT / "examples" / "hello.ix")])
+
 
 if __name__ == "__main__":
-    with open("examples/hello_bot.ix") as f:
-        code = f.read()
-
-    agent_def = parse_ix(code)
-    agent = Agent(agent_def['name'], agent_def['events'])
-
-    agent.trigger("start")
-    agent.trigger("ask")
+    raise SystemExit(main())
