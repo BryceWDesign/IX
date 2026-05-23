@@ -101,6 +101,13 @@ class SendStatement(Statement):
 
 
 @dataclass(frozen=True)
+class IfStatement(Statement):
+    condition: str
+    then_statements: tuple[Statement, ...] = field(default_factory=tuple)
+    else_statements: tuple[Statement, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class OnBlock(Statement):
     event: str
     statements: tuple[Statement, ...] = field(default_factory=tuple)
