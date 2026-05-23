@@ -1,7 +1,9 @@
 """IX public package surface."""
 
+from .assurance import AssuranceAnalyzer, AssuranceCheck, AssuranceReport, assess_ix
 from .ast import Program, SendStatement, ToolArgument, ToolCallStatement
 from .errors import IXError, IXSyntaxError, IXValidationError
+from .evidence import EvidenceBundle, EvidenceBundleWriter
 from .formatting import IXFormatError, IXFormatter, format_ix
 from .parser import IXParser, parse_ix
 from .runtime import ExecutionResult, IXRuntime, IXRuntimeError, run_ix
@@ -11,8 +13,13 @@ from .validator import Diagnostic, IXValidator, validate_ix
 from .version import __version__
 
 __all__ = [
+    "AssuranceAnalyzer",
+    "AssuranceCheck",
+    "AssuranceReport",
     "BuiltInToolRegistry",
     "Diagnostic",
+    "EvidenceBundle",
+    "EvidenceBundleWriter",
     "ExecutionResult",
     "IXError",
     "IXFormatError",
@@ -31,6 +38,7 @@ __all__ = [
     "ToolSpec",
     "TraceEvent",
     "__version__",
+    "assess_ix",
     "format_ix",
     "parse_ix",
     "run_ix",
