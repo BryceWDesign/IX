@@ -33,3 +33,17 @@ jobs:
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Run IX CLI smoke tests
+        run: |
+          ix version
+          ix about
+          ix check examples/hello.ix
+          ix run examples/hello.ix
+          ix trace examples/branching_review.ix --input score=91
+          ix test examples/assurance_ready.ix --input score=91
+          ix orchestrate examples/multi_agent_review.ix --agent Coordinator
+          ix orchestrate examples/multi_agent_review.ix --agent Coordinator --json
+          ix evidence examples/multi_agent_review.ix --agent Coordinator --out .tmp/ix-evidence-smoke
+          ix assure examples/assurance_ready.ix --execute --input score=91
+          ix assure examples/governed_tool.ix --execute
