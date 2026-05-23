@@ -1,9 +1,9 @@
 """Canonical parser for the IX language.
 
 The parser is intentionally conservative. It accepts the executable language core
-that the runtime supports, plus agent/event/policy/tool/handoff structures needed
-for IX's evidence-bound agent contract direction. Unsupported lines fail closed
-with a clear syntax error instead of being silently ignored.
+that the runtime supports, plus agent/event/policy/tool/handoff/branching
+structures needed for IX's evidence-bound agent contract direction. Unsupported
+lines fail closed with a clear syntax error instead of being silently ignored.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from typing import Iterable
 from .ast import (
     AgentBlock,
     AssertStatement,
+    IfStatement,
     LetStatement,
     OnBlock,
     PolicyStatement,
@@ -36,6 +37,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ASSIGNMENT = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<expr>.+)$")
 _AGENT_HEADER = re.compile(r"^agent\s+(?P<name>[A-Za-z_][A-Za-z0-9_-]*)$")
 _ON_HEADER = re.compile(r"^on\s+(?P<event>[A-Za-z_][A-Za-z0-9_.:-]*)$")
+_IF_HEADER = re.compile(r"^if\s+(?P<condition>.+)$")
 _POLICY = re.compile(
     r"^(?P<effect>allow|deny)\s+(?P<target>[A-Za-z_][A-Za-z0-9_.:-]*(?:\.\*)?)"
     r"(?:\s+reason\s+(?P<reason>.+))?$"
@@ -111,6 +113,24 @@ class IXParser:
             body = self._parse_statements(stop_on_closing_brace=True)
             return OnBlock(span=span, event=on_match.group("event"), statements=tuple(body))
 
+        if_match = _IF_HEADER.match(text)
+        if if_match:
+            self._consume_opening_brace("if block", current)
+            then_body = self._parse_statements(stop_on_closing_brace=True)
+            else_body: tuple[Statement, ...] = ()
+
+            if not self._at_end() and self._peek().text == "else":
+                else_line = self._advance()
+                self._consume_opening_brace("else block", else_line)
+                else_body = tuple(self._parse_statements(stop_on_closing_brace=True))
+
+            return IfStatement(
+                span=span,
+                condition=if_match.group("condition").strip(),
+                then_statements=tuple(then_body),
+                else_statements=else_body,
+            )
+
         if text.startswith("let "):
             name, expression = self._parse_assignment(text[4:], current, "let")
             return LetStatement(span=span, name=name, expression=expression)
@@ -181,7 +201,10 @@ class IXParser:
     def _parse_assignment(self, raw: str, line: _LogicalLine, keyword: str) -> tuple[str, str]:
         match = _ASSIGNMENT.match(raw.strip())
         if not match:
-            raise self._syntax(f"Expected {keyword} assignment in the form `{keyword} name = value`", line)
+            raise self._syntax(
+                f"Expected {keyword} assignment in the form `{keyword} name = value`",
+                line,
+            )
         name = match.group("name")
         expression = match.group("expr").strip()
         if not expression:
