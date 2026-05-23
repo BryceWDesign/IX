@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .ast import AgentBlock, LetStatement, OnBlock, Program, RememberStatement, Statement
+from .ast import AgentBlock, IfStatement, LetStatement, OnBlock, Program, RememberStatement, Statement
 from .errors import SourceSpan
 
 
@@ -63,6 +63,19 @@ class IXValidator:
                     )
                 seen_events.add(statement.event)
                 self._validate_statements(statement.statements, diagnostics, inside_agent=inside_agent)
+                continue
+
+            if isinstance(statement, IfStatement):
+                self._validate_statements(
+                    statement.then_statements,
+                    diagnostics,
+                    inside_agent=inside_agent,
+                )
+                self._validate_statements(
+                    statement.else_statements,
+                    diagnostics,
+                    inside_agent=inside_agent,
+                )
                 continue
 
             if isinstance(statement, LetStatement | RememberStatement) and not statement.name:
