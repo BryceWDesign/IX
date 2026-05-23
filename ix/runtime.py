@@ -19,6 +19,7 @@ from typing import Any
 from .ast import (
     AgentBlock,
     AssertStatement,
+    IfStatement,
     LetStatement,
     OnBlock,
     PolicyStatement,
@@ -75,14 +76,19 @@ class ExecutionResult:
 
     status: str
     variables: dict[str, Any] = field(default_factory=dict)
-    memory: dict[str, Any] = field(default_factory=dict)
+    memory: dict[str, Any] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
     approvals_required: list[str] = field(default_factory=list)
     policies: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     handoffs: list[dict[str, Any]] = field(default_factory=list)
+    branches: list[dict[str, Any]] = field(default_factory=list)
     trace: list[TraceEvent] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.memory, dict):
+            self.memory = {}
 
     def trace_as_dicts(self) -> list[dict[str, Any]]:
         """Return the trace ledger in JSON-serializable form."""
@@ -102,6 +108,7 @@ class ExecutionResult:
             "policies": list(self.policies),
             "tool_results": list(self.tool_results),
             "handoffs": list(self.handoffs),
+            "branches": list(self.branches),
             "trace": self.trace_as_dicts(),
         }
 
@@ -211,7 +218,7 @@ class IXRuntime:
         values: dict[str, Any] = dict(inputs or {})
         statements = self._select_statements(program, agent=agent, event=event)
         self._emit(result, "run.start", "IX execution started", program.span)
-        self._run_statements(program, statements, values, result, depth=0)
+        self._run_statements(program, statements, values, result, depth=0, inherited_policies=())
         result.variables = dict(values)
         result.status = "completed"
         self._emit(result, "run.complete", "IX execution completed", program.span)
@@ -225,8 +232,10 @@ class IXRuntime:
         result: ExecutionResult,
         *,
         depth: int,
+        inherited_policies: tuple[PolicyStatement, ...],
     ) -> None:
-        policy_index = self._collect_policies(statements)
+        local_policies = self._collect_policies(statements)
+        policy_index = inherited_policies + local_policies
         for statement in statements:
             self._execute_statement(statement, values, result, policy_index, program, depth=depth)
 
@@ -348,7 +357,48 @@ class IXRuntime:
             self._execute_send(statement, evaluator, values, result, program, depth=depth)
             return
 
+        if isinstance(statement, IfStatement):
+            self._execute_if(statement, evaluator, values, result, policy_index, program, depth=depth)
+            return
+
         raise IXRuntimeError(f"Unsupported runtime statement: {type(statement).__name__}")
+
+    def _execute_if(
+        self,
+        statement: IfStatement,
+        evaluator: SafeExpressionEvaluator,
+        values: dict[str, Any],
+        result: ExecutionResult,
+        policy_index: tuple[PolicyStatement, ...],
+        program: Program,
+        *,
+        depth: int,
+    ) -> None:
+        condition_value = bool(evaluator.evaluate(statement.condition))
+        selected_branch = "then" if condition_value else "else"
+        branch_statements = statement.then_statements if condition_value else statement.else_statements
+        branch_record = {
+            "condition": statement.condition,
+            "selected_branch": selected_branch,
+            "condition_value": condition_value,
+            "statement_count": len(branch_statements),
+        }
+        result.branches.append(branch_record)
+        self._emit(
+            result,
+            "branch.evaluate",
+            f"Branch selected: {selected_branch}",
+            statement.span,
+            **branch_record,
+        )
+        self._run_statements(
+            program,
+            branch_statements,
+            values,
+            result,
+            depth=depth,
+            inherited_policies=policy_index,
+        )
 
     def _execute_send(
         self,
@@ -386,7 +436,14 @@ class IXRuntime:
             arguments=arguments,
         )
         child_values = dict(arguments)
-        self._run_statements(program, target_statements, child_values, result, depth=depth + 1)
+        self._run_statements(
+            program,
+            target_statements,
+            child_values,
+            result,
+            depth=depth + 1,
+            inherited_policies=(),
+        )
         produced_replies = result.replies[before_reply_count:]
         produced_outputs = result.outputs[before_output_count:]
         output_value = self._handoff_output_value(produced_replies, produced_outputs, child_values)
