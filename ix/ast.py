@@ -80,6 +80,19 @@ class PolicyStatement(Statement):
 
 
 @dataclass(frozen=True)
+class ToolArgument:
+    name: str
+    expression: str
+
+
+@dataclass(frozen=True)
+class ToolCallStatement(Statement):
+    tool_name: str
+    output_name: str | None = None
+    arguments: tuple[ToolArgument, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class OnBlock(Statement):
     event: str
     statements: tuple[Statement, ...] = field(default_factory=tuple)
