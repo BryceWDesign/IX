@@ -5,6 +5,7 @@ from __future__ import annotations
 from .ast import (
     AgentBlock,
     AssertStatement,
+    IfStatement,
     LetStatement,
     OnBlock,
     PolicyStatement,
@@ -96,6 +97,17 @@ class IXFormatter:
                 )
                 line = f"{line} with {arguments}"
             return [line]
+
+        if isinstance(statement, IfStatement):
+            lines = [f"{prefix}if {statement.condition} {{"]
+            for child in statement.then_statements:
+                lines.extend(self._format_statement(child, depth=depth + 1))
+            if statement.else_statements:
+                lines.append(f"{prefix}}} else {{")
+                for child in statement.else_statements:
+                    lines.extend(self._format_statement(child, depth=depth + 1))
+            lines.append(f"{prefix}}}")
+            return lines
 
         if isinstance(statement, OnBlock):
             lines = [f"{prefix}on {statement.event} {{"]
