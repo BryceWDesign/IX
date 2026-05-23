@@ -1,6 +1,6 @@
 """IX public package surface."""
 
-from .ast import Program, ToolArgument, ToolCallStatement
+from .ast import Program, SendStatement, ToolArgument, ToolCallStatement
 from .errors import IXError, IXSyntaxError, IXValidationError
 from .formatting import IXFormatError, IXFormatter, format_ix
 from .parser import IXParser, parse_ix
@@ -25,6 +25,7 @@ __all__ = [
     "IXValidationError",
     "IXValidator",
     "Program",
+    "SendStatement",
     "ToolArgument",
     "ToolCallStatement",
     "ToolSpec",
