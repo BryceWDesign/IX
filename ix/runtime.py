@@ -29,9 +29,11 @@ from .ast import (
     ReplyStatement,
     RequireApprovalStatement,
     Statement,
+    ToolCallStatement,
     TraceStatement,
 )
 from .errors import IXError, SourceSpan
+from .tools import BuiltInToolRegistry, IXToolError
 from .tracing import TraceEvent
 from .validator import validate_ix
 
@@ -77,6 +79,7 @@ class ExecutionResult:
     replies: list[str] = field(default_factory=list)
     approvals_required: list[str] = field(default_factory=list)
     policies: list[dict[str, Any]] = field(default_factory=list)
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
     trace: list[TraceEvent] = field(default_factory=list)
 
     def trace_as_dicts(self) -> list[dict[str, Any]]:
@@ -95,6 +98,7 @@ class ExecutionResult:
             "replies": list(self.replies),
             "approvals_required": list(self.approvals_required),
             "policies": list(self.policies),
+            "tool_results": list(self.tool_results),
             "trace": self.trace_as_dicts(),
         }
 
@@ -178,6 +182,9 @@ class SafeExpressionEvaluator:
 class IXRuntime:
     """Execute canonical IX programs with structured trace output."""
 
+    def __init__(self, *, tool_registry: BuiltInToolRegistry | None = None) -> None:
+        self.tool_registry = tool_registry or BuiltInToolRegistry()
+
     def run(
         self,
         program: Program,
@@ -194,10 +201,11 @@ class IXRuntime:
         result = ExecutionResult(status="running")
         values: dict[str, Any] = dict(inputs or {})
         statements = self._select_statements(program, agent=agent, event=event)
+        policy_index = self._collect_policies(statements)
         self._emit(result, "run.start", "IX execution started", program.span)
 
         for statement in statements:
-            self._execute_statement(statement, values, result)
+            self._execute_statement(statement, values, result, policy_index)
 
         result.variables = dict(values)
         result.status = "completed"
@@ -233,11 +241,15 @@ class IXRuntime:
                 return statement.statements
         raise IXRuntimeError(f"Event not found for agent {agent.name}: {event}")
 
+    def _collect_policies(self, statements: tuple[Statement, ...]) -> tuple[PolicyStatement, ...]:
+        return tuple(statement for statement in statements if isinstance(statement, PolicyStatement))
+
     def _execute_statement(
         self,
         statement: Statement,
         values: dict[str, Any],
         result: ExecutionResult,
+        policy_index: tuple[PolicyStatement, ...],
     ) -> None:
         evaluator = SafeExpressionEvaluator({**result.memory, **values})
 
@@ -307,7 +319,105 @@ class IXRuntime:
             self._emit(result, "policy.recorded", f"Policy recorded: {statement.effect}", statement.span)
             return
 
+        if isinstance(statement, ToolCallStatement):
+            self._execute_tool_call(statement, evaluator, values, result, policy_index)
+            return
+
         raise IXRuntimeError(f"Unsupported runtime statement: {type(statement).__name__}")
+
+    def _execute_tool_call(
+        self,
+        statement: ToolCallStatement,
+        evaluator: SafeExpressionEvaluator,
+        values: dict[str, Any],
+        result: ExecutionResult,
+        policy_index: tuple[PolicyStatement, ...],
+    ) -> None:
+        decision = self._tool_policy_decision(statement.tool_name, policy_index)
+        if decision["effect"] != "allow":
+            self._emit(
+                result,
+                "tool.denied",
+                f"Tool denied: {statement.tool_name}",
+                statement.span,
+                tool=statement.tool_name,
+                decision=decision,
+            )
+            raise IXRuntimeError(
+                f"Tool call denied by policy: {statement.tool_name}. "
+                "Add an explicit allow policy before using this tool."
+            )
+
+        arguments = {
+            argument.name: self._evaluate_argument(argument.expression, evaluator)
+            for argument in statement.arguments
+        }
+        try:
+            value = self.tool_registry.invoke(statement.tool_name, arguments)
+        except IXToolError as error:
+            raise IXRuntimeError(str(error)) from error
+
+        if statement.output_name is not None:
+            values[statement.output_name] = value
+
+        tool_result = {
+            "tool": statement.tool_name,
+            "output_name": statement.output_name,
+            "result": value,
+            "arguments": arguments,
+            "policy": decision,
+        }
+        result.tool_results.append(tool_result)
+        self._emit(
+            result,
+            "tool.call",
+            f"Tool executed: {statement.tool_name}",
+            statement.span,
+            tool=statement.tool_name,
+            output_name=statement.output_name,
+            tool_result=value,
+            arguments=arguments,
+            policy=decision,
+        )
+
+    def _tool_policy_decision(
+        self,
+        tool_name: str,
+        policy_index: tuple[PolicyStatement, ...],
+    ) -> dict[str, Any]:
+        matching = [policy for policy in policy_index if self._policy_matches(policy.target, tool_name)]
+        denying = [policy for policy in matching if policy.effect == "deny"]
+        if denying:
+            return {
+                "effect": "deny",
+                "target": denying[-1].target,
+                "reason": denying[-1].reason,
+            }
+        allowing = [policy for policy in matching if policy.effect == "allow"]
+        if allowing:
+            return {
+                "effect": "allow",
+                "target": allowing[-1].target,
+                "reason": allowing[-1].reason,
+            }
+        return {
+            "effect": "deny",
+            "target": tool_name,
+            "reason": "No explicit allow policy matched this tool call.",
+        }
+
+    def _policy_matches(self, target: str, tool_name: str) -> bool:
+        if target == tool_name:
+            return True
+        if target.endswith(".*"):
+            return tool_name.startswith(target[:-1])
+        return False
+
+    def _evaluate_argument(self, expression: str, evaluator: SafeExpressionEvaluator) -> Any:
+        value = evaluator.evaluate(expression)
+        if isinstance(value, str):
+            return self._interpolate(value, evaluator.values)
+        return value
 
     def _render(self, expression: str | None, evaluator: SafeExpressionEvaluator) -> str:
         if expression is None:
