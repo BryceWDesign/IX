@@ -15,6 +15,7 @@ from .ast import (
     ReplyStatement,
     RequireApprovalStatement,
     Statement,
+    ToolCallStatement,
     TraceStatement,
 )
 from .errors import IXError
@@ -71,6 +72,17 @@ class IXFormatter:
             line = f"{prefix}{statement.effect} {statement.target}"
             if statement.reason is not None:
                 line = f"{line} reason {statement.reason}"
+            return [line]
+
+        if isinstance(statement, ToolCallStatement):
+            line = f"{prefix}call {statement.tool_name}"
+            if statement.output_name is not None:
+                line = f"{line} as {statement.output_name}"
+            if statement.arguments:
+                arguments = ", ".join(
+                    f"{argument.name} = {argument.expression}" for argument in statement.arguments
+                )
+                line = f"{line} with {arguments}"
             return [line]
 
         if isinstance(statement, OnBlock):
