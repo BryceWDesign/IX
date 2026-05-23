@@ -1,0 +1,6 @@
+trace "governed tool example started"
+allow tool.upper reason "Safe deterministic built-in tool"
+call tool.upper as shouted with text = "evidence-bound agent contract"
+reply shouted
+assert shouted == "EVIDENCE-BOUND AGENT CONTRACT"
+require human_approval reason "Reviewer must approve downstream use"
