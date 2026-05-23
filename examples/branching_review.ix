@@ -1,0 +1,7 @@
+trace "branching review example started"
+if score >= 80 {
+    reply "approved"
+} else {
+    reply "human review required"
+}
+assert score >= 0
