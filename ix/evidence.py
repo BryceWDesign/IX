@@ -61,6 +61,7 @@ class EvidenceBundleWriter:
                         "policies.json",
                         "tool-results.json",
                         "handoffs.json",
+                        "branches.json",
                         "approvals-required.json",
                         "outputs.txt",
                         "replies.txt",
@@ -85,6 +86,7 @@ class EvidenceBundleWriter:
                         "policies": len(result.policies),
                         "tool_results": len(result.tool_results),
                         "handoffs": len(result.handoffs),
+                        "branches": len(result.branches),
                         "approvals_required": len(result.approvals_required),
                     },
                     "variables": result_payload["variables"],
@@ -96,6 +98,7 @@ class EvidenceBundleWriter:
         files.append(self._write_json(output_dir / "policies.json", result.policies))
         files.append(self._write_json(output_dir / "tool-results.json", result.tool_results))
         files.append(self._write_json(output_dir / "handoffs.json", result.handoffs))
+        files.append(self._write_json(output_dir / "branches.json", result.branches))
         files.append(self._write_json(output_dir / "approvals-required.json", result.approvals_required))
         files.append(self._write_text(output_dir / "outputs.txt", "\n".join(result.outputs) + "\n"))
         files.append(self._write_text(output_dir / "replies.txt", "\n".join(result.replies) + "\n"))
@@ -129,6 +132,7 @@ class EvidenceBundleWriter:
             f"- Policy records captured: {len(result.policies)}.\n"
             f"- Tool results captured: {len(result.tool_results)}.\n"
             f"- Agent handoffs captured: {len(result.handoffs)}.\n"
+            f"- Conditional branches captured: {len(result.branches)}.\n"
             f"- Human approval requirements captured: {len(result.approvals_required)}.\n\n"
             "## Not claimed\n\n"
             "- This bundle does not certify the script as safe, complete, lawful, or production-ready.\n"
