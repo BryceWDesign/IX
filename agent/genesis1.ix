@@ -1,5 +1,6 @@
-# IX-GENESIS I: Boot Logic
-say Hello. I am IX-GENESIS. I evolve.
-remember name = IX-GENESIS
+trace "genesis one boot contract started"
+remember name = "IX-GENESIS-I"
 recall name
-say Initial boot complete.
+reply "{name} boot contract ready"
+assert name == "IX-GENESIS-I"
+require human_approval reason "Legacy genesis example is demonstration-only and must not authorize autonomous evolution"
