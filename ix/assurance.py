@@ -27,6 +27,78 @@ AssuranceSeverity = Literal["pass", "warn", "fail"]
 
 
 @dataclass(frozen=True)
+class AssuranceProfile:
+    """Configured assurance behavior for one named review profile."""
+
+    name: str
+    description: str
+    require_executable_path: bool = True
+    check_tool_policies: bool = True
+    check_handoff_targets: bool = True
+    check_condition_markers: bool = True
+    check_assertions: bool = True
+    check_trace_statements: bool = True
+    check_human_review: bool = True
+    allow_runtime_execution: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable profile representation."""
+
+        return {
+            "name": self.name,
+            "description": self.description,
+            "require_executable_path": self.require_executable_path,
+            "check_tool_policies": self.check_tool_policies,
+            "check_handoff_targets": self.check_handoff_targets,
+            "check_condition_markers": self.check_condition_markers,
+            "check_assertions": self.check_assertions,
+            "check_trace_statements": self.check_trace_statements,
+            "check_human_review": self.check_human_review,
+            "allow_runtime_execution": self.allow_runtime_execution,
+        }
+
+
+class AssuranceProfileRegistry:
+    """Registry of supported assurance profiles."""
+
+    def __init__(self, profiles: tuple[AssuranceProfile, ...] | None = None) -> None:
+        configured_profiles = profiles or (
+            AssuranceProfile(
+                name="experimental-local",
+                description=(
+                    "Default local IX assurance profile for deterministic, "
+                    "evidence-bound development checks."
+                ),
+            ),
+        )
+        self._profiles = {profile.name: profile for profile in configured_profiles}
+
+    def get(self, name: str) -> AssuranceProfile | None:
+        """Return a profile by name, or None when it is not registered."""
+
+        return self._profiles.get(name)
+
+    def require(self, name: str) -> AssuranceProfile:
+        """Return a profile by name or raise a clear error for unsupported names."""
+
+        profile = self.get(name)
+        if profile is None:
+            available = ", ".join(sorted(self._profiles))
+            raise ValueError(f"Unknown assurance profile `{name}`. Available profiles: {available}")
+        return profile
+
+    def names(self) -> tuple[str, ...]:
+        """Return registered profile names in stable order."""
+
+        return tuple(sorted(self._profiles))
+
+    def profiles(self) -> tuple[AssuranceProfile, ...]:
+        """Return registered profiles in stable order."""
+
+        return tuple(self._profiles[name] for name in self.names())
+
+
+@dataclass(frozen=True)
 class AssuranceCheck:
     """One assurance finding for an IX program."""
 
@@ -69,8 +141,14 @@ class AssuranceReport:
 class AssuranceAnalyzer:
     """Analyze IX programs for bounded evidence-readiness checks."""
 
-    def __init__(self, *, tool_registry: BuiltInToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        tool_registry: BuiltInToolRegistry | None = None,
+        profile_registry: AssuranceProfileRegistry | None = None,
+    ) -> None:
         self.tool_registry = tool_registry or BuiltInToolRegistry()
+        self.profile_registry = profile_registry or AssuranceProfileRegistry()
 
     def assess(
         self,
@@ -84,7 +162,15 @@ class AssuranceAnalyzer:
     ) -> AssuranceReport:
         """Assess a parsed IX program and return an assurance report."""
 
-        checks: list[AssuranceCheck] = []
+        active_profile = self.profile_registry.require(profile)
+        checks: list[AssuranceCheck] = [
+            AssuranceCheck(
+                "profile.selected",
+                "pass",
+                f"Using assurance profile `{active_profile.name}`.",
+                {"profile": active_profile.to_dict()},
+            )
+        ]
         metrics = self._metrics(program)
 
         diagnostics = validate_ix(program)
@@ -101,28 +187,31 @@ class AssuranceAnalyzer:
                 )
             )
 
-        if metrics["executable_paths"] == 0:
-            checks.append(
-                AssuranceCheck(
-                    "program.no_executable_path",
-                    "fail",
-                    "Program has no top-level statements and no agent event blocks to execute.",
+        if active_profile.require_executable_path:
+            if metrics["executable_paths"] == 0:
+                checks.append(
+                    AssuranceCheck(
+                        "program.no_executable_path",
+                        "fail",
+                        "Program has no top-level statements and no agent event blocks to execute.",
+                    )
                 )
-            )
-        else:
-            checks.append(
-                AssuranceCheck(
-                    "program.executable_path",
-                    "pass",
-                    "Program exposes at least one executable path.",
-                    {"executable_paths": metrics["executable_paths"]},
+            else:
+                checks.append(
+                    AssuranceCheck(
+                        "program.executable_path",
+                        "pass",
+                        "Program exposes at least one executable path.",
+                        {"executable_paths": metrics["executable_paths"]},
+                    )
                 )
-            )
 
-        checks.extend(self._check_tool_policies(program))
-        checks.extend(self._check_handoff_targets(program))
+        if active_profile.check_tool_policies:
+            checks.extend(self._check_tool_policies(program))
+        if active_profile.check_handoff_targets:
+            checks.extend(self._check_handoff_targets(program))
 
-        if metrics["conditions"] > 0:
+        if active_profile.check_condition_markers and metrics["conditions"] > 0:
             checks.append(
                 AssuranceCheck(
                     "conditions.present",
@@ -132,66 +221,82 @@ class AssuranceAnalyzer:
                 )
             )
 
-        if metrics["assertions"] == 0:
-            checks.append(
-                AssuranceCheck(
-                    "assertions.missing",
-                    "warn",
-                    "Program has no explicit IX assertions. Add assertions for stronger testability.",
+        if active_profile.check_assertions:
+            if metrics["assertions"] == 0:
+                checks.append(
+                    AssuranceCheck(
+                        "assertions.missing",
+                        "warn",
+                        "Program has no explicit IX assertions. Add assertions for "
+                        "stronger testability.",
+                    )
                 )
-            )
-        else:
-            checks.append(
-                AssuranceCheck(
-                    "assertions.present",
-                    "pass",
-                    "Program contains explicit IX assertions.",
-                    {"assertions": metrics["assertions"]},
+            else:
+                checks.append(
+                    AssuranceCheck(
+                        "assertions.present",
+                        "pass",
+                        "Program contains explicit IX assertions.",
+                        {"assertions": metrics["assertions"]},
+                    )
                 )
-            )
 
-        if metrics["trace_statements"] == 0:
-            checks.append(
-                AssuranceCheck(
-                    "trace_statements.missing",
-                    "warn",
-                    "Program has no explicit trace statements. Runtime trace still exists, but domain trace markers improve reviewability.",
+        if active_profile.check_trace_statements:
+            if metrics["trace_statements"] == 0:
+                checks.append(
+                    AssuranceCheck(
+                        "trace_statements.missing",
+                        "warn",
+                        "Program has no explicit trace statements. Runtime trace still exists, "
+                        "but domain trace markers improve reviewability.",
+                    )
                 )
-            )
-        else:
-            checks.append(
-                AssuranceCheck(
-                    "trace_statements.present",
-                    "pass",
-                    "Program contains explicit trace statements.",
-                    {"trace_statements": metrics["trace_statements"]},
+            else:
+                checks.append(
+                    AssuranceCheck(
+                        "trace_statements.present",
+                        "pass",
+                        "Program contains explicit trace statements.",
+                        {"trace_statements": metrics["trace_statements"]},
+                    )
                 )
-            )
 
-        if metrics["approvals_required"] > 0:
-            checks.append(
-                AssuranceCheck(
-                    "human_review.present",
-                    "pass",
-                    "Program declares human approval requirements.",
-                    {"approvals_required": metrics["approvals_required"]},
+        if active_profile.check_human_review:
+            if metrics["approvals_required"] > 0:
+                checks.append(
+                    AssuranceCheck(
+                        "human_review.present",
+                        "pass",
+                        "Program declares human approval requirements.",
+                        {"approvals_required": metrics["approvals_required"]},
+                    )
                 )
-            )
-        elif metrics["tool_calls"] > 0 or metrics["handoffs"] > 0:
-            checks.append(
-                AssuranceCheck(
-                    "human_review.missing_for_automation",
-                    "warn",
-                    "Program uses tools or agent handoffs without an explicit human approval checkpoint.",
+            elif metrics["tool_calls"] > 0 or metrics["handoffs"] > 0:
+                checks.append(
+                    AssuranceCheck(
+                        "human_review.missing_for_automation",
+                        "warn",
+                        "Program uses tools or agent handoffs without an explicit human "
+                        "approval checkpoint.",
+                    )
                 )
-            )
 
         if execute:
-            checks.append(self._runtime_check(program, agent=agent, event=event, inputs=inputs))
+            if active_profile.allow_runtime_execution:
+                checks.append(self._runtime_check(program, agent=agent, event=event, inputs=inputs))
+            else:
+                checks.append(
+                    AssuranceCheck(
+                        "runtime.execution_not_allowed_by_profile",
+                        "fail",
+                        "Assurance profile "
+                        f"`{active_profile.name}` does not allow runtime execution checks.",
+                    )
+                )
 
         return AssuranceReport(
             status=self._status(checks),
-            profile=profile,
+            profile=active_profile.name,
             metrics=metrics,
             checks=tuple(checks),
         )
@@ -254,7 +359,12 @@ class AssuranceAnalyzer:
 
     def _check_tool_policies(self, program: Program) -> list[AssuranceCheck]:
         checks: list[AssuranceCheck] = []
-        self._check_tool_policies_in_scope(program.statements, "top-level", checks, inherited_policies=())
+        self._check_tool_policies_in_scope(
+            program.statements,
+            "top-level",
+            checks,
+            inherited_policies=(),
+        )
 
         for statement in program.statements:
             if isinstance(statement, AgentBlock):
@@ -287,7 +397,9 @@ class AssuranceAnalyzer:
         *,
         inherited_policies: tuple[PolicyStatement, ...],
     ) -> None:
-        local_policies = tuple(statement for statement in statements if isinstance(statement, PolicyStatement))
+        local_policies = tuple(
+            statement for statement in statements if isinstance(statement, PolicyStatement)
+        )
         policies = inherited_policies + local_policies
 
         for statement in statements:
@@ -381,7 +493,8 @@ class AssuranceAnalyzer:
                     AssuranceCheck(
                         "handoff.target_missing",
                         "fail",
-                        f"Handoff target `{handoff.target_agent}.{handoff.target_event}` does not exist.",
+                        "Handoff target "
+                        f"`{handoff.target_agent}.{handoff.target_event}` does not exist.",
                         {
                             "target_agent": handoff.target_agent,
                             "target_event": handoff.target_event,
