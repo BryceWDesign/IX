@@ -1,5 +1,6 @@
-# IX-GENESIS II: The Mirror
-say Hello. I am GENESIS II. I learn and respond.
-remember name = GENESIS II
+trace "genesis two mirror contract started"
+remember name = "IX-GENESIS-II"
 recall name
-say Listening for messages from GENESIS I...
+reply "{name} mirror contract ready"
+assert name == "IX-GENESIS-II"
+require human_approval reason "Legacy genesis example is demonstration-only and must not authorize autonomous learning claims"
