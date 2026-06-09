@@ -117,3 +117,67 @@ class OnBlock(Statement):
 class AgentBlock(Statement):
     name: str
     statements: tuple[Statement, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class CognitionContractStatement(Statement):
+    """Base class for declarative cognition-contract statements."""
+
+
+@dataclass(frozen=True)
+class AttemptBlock(CognitionContractStatement):
+    """A named governed cognition attempt contract."""
+
+    name: str
+    statements: tuple[Statement, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class PurposeStatement(CognitionContractStatement):
+    """The declared reason a cognition attempt exists."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class NonGoalStatement(CognitionContractStatement):
+    """A declared boundary that a cognition attempt must not cross."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class ClaimBoundaryStatement(CognitionContractStatement):
+    """A statement limiting what may be claimed from a cognition attempt."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class ObligationBlock(CognitionContractStatement):
+    """A required property that a downstream cognition system must satisfy."""
+
+    identifier: str
+    statements: tuple[Statement, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class EvidenceRequirementStatement(CognitionContractStatement):
+    """An evidence artifact or record required for an obligation to count."""
+
+    artifact: str
+
+
+@dataclass(frozen=True)
+class FalsifyIfStatement(CognitionContractStatement):
+    """A condition that blocks or falsifies a claim if triggered."""
+
+    condition: str
+
+
+@dataclass(frozen=True)
+class HandoffContractStatement(CognitionContractStatement):
+    """A structured downstream handoff target for a governed contract."""
+
+    target: str
+    schema_name: str | None = None
