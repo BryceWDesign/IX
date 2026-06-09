@@ -49,7 +49,7 @@ class TestIXCognitionRuntimeMetadata(unittest.TestCase):
                     "schema": "ix.cognition.contract.v1",
                     "source": {
                         "filename": "<memory>",
-                        "line": 8,
+                        "line": 7,
                         "column": 17,
                     },
                 }
@@ -62,7 +62,7 @@ class TestIXCognitionRuntimeMetadata(unittest.TestCase):
                     "id": "prediction_before_trial",
                     "source": {
                         "filename": "<memory>",
-                        "line": 10,
+                        "line": 9,
                         "column": 17,
                     },
                     "evidence_required": ["prediction_record"],
