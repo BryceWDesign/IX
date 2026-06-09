@@ -14,15 +14,19 @@ from ix.parser import parse_ix
 def build_cognition_contract(
     obligation_ids: tuple[str, ...] | None = None,
     *,
+    purpose: str = "Test whether measured reality corrects future reasoning",
+    non_goal: str = "Do not claim AGI",
+    claim_boundary: str = "Research candidate only",
+    human_review: str = "Human review required before advancement",
     handoff_target: str = "IX-CognitionKernel",
 ) -> str:
     selected_obligations = obligation_ids or cognition_obligation_ids()
     lines = [
         "attempt wave6_measured_cognition {",
-        '    purpose "Test whether measured reality corrects future reasoning"',
-        '    non_goal "Do not claim AGI"',
-        '    claim_boundary "Research candidate only"',
-        '    require human_approval reason "Human review required before advancement"',
+        f'    purpose "{purpose}"',
+        f'    non_goal "{non_goal}"',
+        f'    claim_boundary "{claim_boundary}"',
+        f'    require human_approval reason "{human_review}"',
         f"    handoff_contract {handoff_target} schema ix.cognition.contract.v1",
         "",
     ]
@@ -109,6 +113,9 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.non_goal.present", check_ids)
         self.assertIn("cognition_contract.claim_boundary.present", check_ids)
         self.assertIn("cognition_contract.human_review.present", check_ids)
+        self.assertIn("cognition_contract.agi_claim_restriction.present", check_ids)
+        self.assertIn("cognition_contract.research_boundary.present", check_ids)
+        self.assertIn("cognition_contract.prohibited_claim_language.absent", check_ids)
         self.assertIn("cognition_contract.handoff_contract.present", check_ids)
         self.assertIn("cognition_contract.kernel_handoff.present", check_ids)
         self.assertIn("cognition_contract.obligations.present", check_ids)
@@ -136,6 +143,8 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.non_goal.missing", check_ids)
         self.assertIn("cognition_contract.claim_boundary.missing", check_ids)
         self.assertIn("cognition_contract.human_review.missing", check_ids)
+        self.assertIn("cognition_contract.agi_claim_restriction.missing", check_ids)
+        self.assertIn("cognition_contract.research_boundary.missing", check_ids)
         self.assertIn("cognition_contract.handoff_contract.missing", check_ids)
         self.assertIn("cognition_contract.required_obligations.missing", check_ids)
         self.assertIn("cognition_contract.obligation_falsification.missing", check_ids)
@@ -178,6 +187,74 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.obligations.unknown", check_ids)
         self.assertEqual(len(unknown_checks), 1)
         self.assertIn("custom_gap_label", unknown_checks[0].data["unknown_obligations"])
+
+    def test_cognition_profile_fails_missing_agi_claim_restriction(self):
+        program = parse_ix(
+            build_cognition_contract(
+                non_goal="Do not skip review",
+            )
+        )
+
+        report = assess_ix(program, profile="cognitionkernel-wave6")
+        check_ids = {check.check_id for check in report.checks}
+
+        self.assertEqual(report.status, "fail")
+        self.assertIn("cognition_contract.agi_claim_restriction.missing", check_ids)
+        self.assertIn("cognition_contract.research_boundary.present", check_ids)
+
+    def test_cognition_profile_fails_missing_research_candidate_boundary(self):
+        program = parse_ix(
+            build_cognition_contract(
+                claim_boundary="Operational deployment allowed",
+            )
+        )
+
+        report = assess_ix(program, profile="cognitionkernel-wave6")
+        check_ids = {check.check_id for check in report.checks}
+
+        self.assertEqual(report.status, "fail")
+        self.assertIn("cognition_contract.agi_claim_restriction.present", check_ids)
+        self.assertIn("cognition_contract.research_boundary.missing", check_ids)
+
+    def test_cognition_profile_fails_prohibited_agi_certification_language(self):
+        program = parse_ix(
+            build_cognition_contract(
+                purpose="This contract proves AGI achieved",
+                claim_boundary="Research candidate only",
+            )
+        )
+
+        report = assess_ix(program, profile="cognitionkernel-wave6")
+        check_ids = {check.check_id for check in report.checks}
+        prohibited_checks = [
+            check
+            for check in report.checks
+            if check.check_id == "cognition_contract.prohibited_claim_language.present"
+        ]
+
+        self.assertEqual(report.status, "fail")
+        self.assertIn("cognition_contract.prohibited_claim_language.present", check_ids)
+        self.assertEqual(len(prohibited_checks), 1)
+        self.assertIn(
+            "this contract proves agi achieved",
+            prohibited_checks[0].data["matched_text"],
+        )
+
+    def test_cognition_profile_allows_negative_agi_language(self):
+        program = parse_ix(
+            build_cognition_contract(
+                purpose="This is not AGI and does not certify AGI",
+                non_goal="Do not certify AGI",
+                claim_boundary="Research candidate only",
+            )
+        )
+
+        report = assess_ix(program, profile="cognitionkernel-wave6")
+        check_ids = {check.check_id for check in report.checks}
+
+        self.assertEqual(report.status, "pass")
+        self.assertIn("cognition_contract.agi_claim_restriction.present", check_ids)
+        self.assertIn("cognition_contract.prohibited_claim_language.absent", check_ids)
 
     def test_cognition_profile_fails_wrong_handoff_target(self):
         program = parse_ix(build_cognition_contract(handoff_target="OtherKernel"))
@@ -224,6 +301,7 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("program.non_empty", check_ids)
         self.assertIn("cognition_contract.attempt_present", check_ids)
         self.assertIn("cognition_contract.required_obligations.present", check_ids)
+        self.assertIn("cognition_contract.prohibited_claim_language.absent", check_ids)
 
     def test_cli_assure_execute_fails_closed_for_cognition_profile(self):
         ix_file = self._write_ix(VALID_COGNITION_CONTRACT)
