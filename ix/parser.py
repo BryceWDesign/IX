@@ -15,12 +15,20 @@ from typing import Iterable
 from .ast import (
     AgentBlock,
     AssertStatement,
+    AttemptBlock,
+    ClaimBoundaryStatement,
+    EvidenceRequirementStatement,
+    FalsifyIfStatement,
+    HandoffContractStatement,
     IfStatement,
     LetStatement,
+    NonGoalStatement,
+    ObligationBlock,
     OnBlock,
     PolicyStatement,
     PrintStatement,
     Program,
+    PurposeStatement,
     RecallStatement,
     RememberStatement,
     ReplyStatement,
@@ -34,10 +42,17 @@ from .ast import (
 from .errors import IXSyntaxError, SourceSpan
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CONTRACT_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]*$")
 _ASSIGNMENT = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<expr>.+)$")
 _AGENT_HEADER = re.compile(r"^agent\s+(?P<name>[A-Za-z_][A-Za-z0-9_-]*)$")
 _ON_HEADER = re.compile(r"^on\s+(?P<event>[A-Za-z_][A-Za-z0-9_.:-]*)$")
 _IF_HEADER = re.compile(r"^if\s+(?P<condition>.+)$")
+_ATTEMPT_HEADER = re.compile(r"^attempt\s+(?P<name>[A-Za-z_][A-Za-z0-9_-]*)$")
+_OBLIGATION_HEADER = re.compile(r"^obligation\s+(?P<identifier>[A-Za-z_][A-Za-z0-9_.:-]*)$")
+_HANDOFF_CONTRACT = re.compile(
+    r"^handoff_contract\s+(?P<target>[A-Za-z_][A-Za-z0-9_.:-]*)"
+    r"(?:\s+schema\s+(?P<schema>[A-Za-z_][A-Za-z0-9_.:-]*))?$"
+)
 _POLICY = re.compile(
     r"^(?P<effect>allow|deny)\s+(?P<target>[A-Za-z_][A-Za-z0-9_.:-]*(?:\.\*)?)"
     r"(?:\s+reason\s+(?P<reason>.+))?$"
@@ -107,11 +122,27 @@ class IXParser:
             body = self._parse_statements(stop_on_closing_brace=True)
             return AgentBlock(span=span, name=agent_match.group("name"), statements=tuple(body))
 
+        attempt_match = _ATTEMPT_HEADER.match(text)
+        if attempt_match:
+            self._consume_opening_brace("attempt block", current)
+            body = self._parse_statements(stop_on_closing_brace=True)
+            return AttemptBlock(span=span, name=attempt_match.group("name"), statements=tuple(body))
+
         on_match = _ON_HEADER.match(text)
         if on_match:
             self._consume_opening_brace("event block", current)
             body = self._parse_statements(stop_on_closing_brace=True)
             return OnBlock(span=span, event=on_match.group("event"), statements=tuple(body))
+
+        obligation_match = _OBLIGATION_HEADER.match(text)
+        if obligation_match:
+            self._consume_opening_brace("obligation block", current)
+            body = self._parse_statements(stop_on_closing_brace=True)
+            return ObligationBlock(
+                span=span,
+                identifier=obligation_match.group("identifier"),
+                statements=tuple(body),
+            )
 
         if_match = _IF_HEADER.match(text)
         if if_match:
@@ -155,6 +186,37 @@ class IXParser:
 
         if text.startswith("trace "):
             return TraceStatement(span=span, message=self._required_tail(text, "trace", current))
+
+        if text.startswith("purpose "):
+            return PurposeStatement(span=span, text=self._required_tail(text, "purpose", current))
+
+        if text.startswith("non_goal "):
+            return NonGoalStatement(span=span, text=self._required_tail(text, "non_goal", current))
+
+        if text.startswith("claim_boundary "):
+            return ClaimBoundaryStatement(
+                span=span,
+                text=self._required_tail(text, "claim_boundary", current),
+            )
+
+        if text.startswith("evidence_required "):
+            artifact = self._required_tail(text, "evidence_required", current)
+            self._require_contract_identifier(artifact, current, "evidence requirement")
+            return EvidenceRequirementStatement(span=span, artifact=artifact)
+
+        if text.startswith("falsify_if "):
+            return FalsifyIfStatement(
+                span=span,
+                condition=self._required_tail(text, "falsify_if", current),
+            )
+
+        handoff_match = _HANDOFF_CONTRACT.match(text)
+        if handoff_match:
+            return HandoffContractStatement(
+                span=span,
+                target=handoff_match.group("target"),
+                schema_name=handoff_match.group("schema"),
+            )
 
         send_match = _SEND.match(text)
         if send_match:
@@ -266,6 +328,10 @@ class IXParser:
 
     def _require_identifier(self, value: str, line: _LogicalLine, label: str) -> None:
         if not _IDENTIFIER.match(value):
+            raise self._syntax(f"Invalid {label}: {value!r}", line)
+
+    def _require_contract_identifier(self, value: str, line: _LogicalLine, label: str) -> None:
+        if not _CONTRACT_IDENTIFIER.match(value):
             raise self._syntax(f"Invalid {label}: {value!r}", line)
 
     def _logical_lines(self, source: str) -> Iterable[_LogicalLine]:
