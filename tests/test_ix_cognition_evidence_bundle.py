@@ -62,6 +62,8 @@ class TestIXCognitionEvidenceBundle(unittest.TestCase):
         self.assertIn("falsification-gates.json", relative_files)
         self.assertIn("claim-boundaries.json", relative_files)
         self.assertIn("kernel-handoff.json", relative_files)
+        self.assertIn("satisfaction-report.json", relative_files)
+        self.assertIn("failure-report.json", relative_files)
 
         manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
         summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
@@ -70,14 +72,20 @@ class TestIXCognitionEvidenceBundle(unittest.TestCase):
         gates = json.loads((output_dir / "falsification-gates.json").read_text(encoding="utf-8"))
         boundaries = json.loads((output_dir / "claim-boundaries.json").read_text(encoding="utf-8"))
         kernel_handoff = json.loads((output_dir / "kernel-handoff.json").read_text(encoding="utf-8"))
+        satisfaction = json.loads((output_dir / "satisfaction-report.json").read_text(encoding="utf-8"))
+        failure = json.loads((output_dir / "failure-report.json").read_text(encoding="utf-8"))
 
         self.assertIn("contract.json", manifest["artifact_files"])
         self.assertIn("kernel-handoff.json", manifest["artifact_files"])
+        self.assertIn("satisfaction-report.json", manifest["artifact_files"])
+        self.assertIn("failure-report.json", manifest["artifact_files"])
         self.assertEqual(summary["counts"]["contract_attempts"], 1)
         self.assertEqual(summary["counts"]["contract_obligations"], 1)
         self.assertEqual(summary["counts"]["contract_evidence_requirements"], 1)
         self.assertEqual(summary["counts"]["contract_falsification_gates"], 1)
         self.assertEqual(summary["counts"]["kernel_handoff_packages"], 1)
+        self.assertEqual(summary["counts"]["satisfaction_report_items"], 1)
+        self.assertEqual(summary["counts"]["failure_report_gates"], 1)
         self.assertEqual(contract["runtime_semantics"], "metadata_only_not_executed")
         self.assertEqual(contract["attempts"][0]["name"], "wave6_measured_cognition")
         self.assertEqual(obligations["obligations"][0]["id"], "prediction_before_trial")
@@ -117,10 +125,49 @@ class TestIXCognitionEvidenceBundle(unittest.TestCase):
             kernel_handoff["packages"][0]["obligations"][0]["canonical_definition"]["id"],
             "prediction_before_trial",
         )
-        self.assertIn(
-            "IX-CognitionKernel handoff packages captured: 1",
-            (output_dir / "assurance-claims.md").read_text(encoding="utf-8"),
+
+        self.assertEqual(satisfaction["report_type"], "ix.cognition.satisfaction_report")
+        self.assertEqual(satisfaction["status"], "not_evaluated")
+        self.assertEqual(
+            satisfaction["attempts"][0]["evaluation_state"],
+            "pending_downstream_evidence",
         )
+        self.assertEqual(
+            satisfaction["attempts"][0]["obligations"][0]["status"],
+            "pending_downstream_evidence",
+        )
+        self.assertIsNone(satisfaction["attempts"][0]["obligations"][0]["satisfied"])
+        self.assertEqual(
+            satisfaction["attempts"][0]["obligations"][0]["required_evidence"],
+            ["prediction_record"],
+        )
+        self.assertEqual(
+            satisfaction["attempts"][0]["obligations"][0]["received_evidence"],
+            [],
+        )
+
+        self.assertEqual(failure["report_type"], "ix.cognition.failure_report")
+        self.assertEqual(failure["status"], "not_evaluated")
+        self.assertEqual(
+            failure["attempts"][0]["failure_conditions"][0]["obligation"],
+            "prediction_before_trial",
+        )
+        self.assertEqual(
+            failure["attempts"][0]["failure_conditions"][0]["condition"],
+            "prediction_missing",
+        )
+        self.assertIsNone(failure["attempts"][0]["failure_conditions"][0]["triggered"])
+        self.assertTrue(failure["attempts"][0]["failure_conditions"][0]["claim_blocking"])
+        self.assertEqual(
+            failure["attempts"][0]["failure_conditions"][0]["required_resolution"],
+            "human_review",
+        )
+
+        claims_text = (output_dir / "assurance-claims.md").read_text(encoding="utf-8")
+        self.assertIn("IX-CognitionKernel handoff packages captured: 1", claims_text)
+        self.assertIn("Satisfaction report obligations listed: 1", claims_text)
+        self.assertIn("Failure report gates listed: 1", claims_text)
+        self.assertIn("does not mark cognition obligations as satisfied", claims_text)
 
     def test_kernel_handoff_payload_is_empty_without_kernel_target(self):
         source_file = self._write_ix(NON_KERNEL_CONTRACT)
@@ -160,15 +207,21 @@ class TestIXCognitionEvidenceBundle(unittest.TestCase):
         gates = json.loads((output_dir / "falsification-gates.json").read_text(encoding="utf-8"))
         boundaries = json.loads((output_dir / "claim-boundaries.json").read_text(encoding="utf-8"))
         kernel_handoff = json.loads((output_dir / "kernel-handoff.json").read_text(encoding="utf-8"))
+        satisfaction = json.loads((output_dir / "satisfaction-report.json").read_text(encoding="utf-8"))
+        failure = json.loads((output_dir / "failure-report.json").read_text(encoding="utf-8"))
 
         self.assertEqual(summary["counts"]["contract_attempts"], 0)
         self.assertEqual(summary["counts"]["contract_obligations"], 0)
         self.assertEqual(summary["counts"]["kernel_handoff_packages"], 0)
+        self.assertEqual(summary["counts"]["satisfaction_report_items"], 0)
+        self.assertEqual(summary["counts"]["failure_report_gates"], 0)
         self.assertEqual(contract["attempts"], [])
         self.assertEqual(obligations["obligations"], [])
         self.assertEqual(gates["falsification_gates"], [])
         self.assertEqual(boundaries["attempts"], [])
         self.assertEqual(kernel_handoff["packages"], [])
+        self.assertEqual(satisfaction["attempts"], [])
+        self.assertEqual(failure["attempts"], [])
 
     def test_cli_evidence_command_lists_cognition_artifacts(self):
         source_file = self._write_ix(COGNITION_CONTRACT)
@@ -185,7 +238,11 @@ class TestIXCognitionEvidenceBundle(unittest.TestCase):
         self.assertIn("- falsification-gates.json", output)
         self.assertIn("- claim-boundaries.json", output)
         self.assertIn("- kernel-handoff.json", output)
+        self.assertIn("- satisfaction-report.json", output)
+        self.assertIn("- failure-report.json", output)
         self.assertTrue((output_dir / "kernel-handoff.json").exists())
+        self.assertTrue((output_dir / "satisfaction-report.json").exists())
+        self.assertTrue((output_dir / "failure-report.json").exists())
 
     def setUp(self):
         self._tempdir = tempfile.TemporaryDirectory()
