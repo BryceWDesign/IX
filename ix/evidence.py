@@ -46,6 +46,8 @@ class EvidenceBundleWriter:
         contract_metadata = self._contract_metadata(result)
         contract_counts = self._contract_counts(contract_metadata)
         kernel_handoff_payload = self._kernel_handoff_payload(contract_metadata)
+        satisfaction_report = self._satisfaction_report_payload(contract_metadata)
+        failure_report = self._failure_report_payload(contract_metadata)
 
         artifact_files = [
             "summary.json",
@@ -60,6 +62,8 @@ class EvidenceBundleWriter:
             "falsification-gates.json",
             "claim-boundaries.json",
             "kernel-handoff.json",
+            "satisfaction-report.json",
+            "failure-report.json",
             "outputs.txt",
             "replies.txt",
             "assurance-claims.md",
@@ -110,6 +114,12 @@ class EvidenceBundleWriter:
                         "kernel_handoff_packages": len(
                             kernel_handoff_payload["packages"]
                         ),
+                        "satisfaction_report_items": self._report_obligation_count(
+                            satisfaction_report
+                        ),
+                        "failure_report_gates": self._report_failure_gate_count(
+                            failure_report
+                        ),
                     },
                     "variables": result_payload["variables"],
                     "memory": result_payload["memory"],
@@ -147,6 +157,18 @@ class EvidenceBundleWriter:
             self._write_json(
                 output_dir / "kernel-handoff.json",
                 kernel_handoff_payload,
+            )
+        )
+        files.append(
+            self._write_json(
+                output_dir / "satisfaction-report.json",
+                satisfaction_report,
+            )
+        )
+        files.append(
+            self._write_json(
+                output_dir / "failure-report.json",
+                failure_report,
             )
         )
         files.append(self._write_text(output_dir / "outputs.txt", "\n".join(result.outputs) + "\n"))
@@ -305,6 +327,126 @@ class EvidenceBundleWriter:
 
         return payload
 
+    def _satisfaction_report_payload(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        attempts: list[dict[str, Any]] = []
+
+        for attempt in self._attempts(metadata):
+            attempt_name = str(attempt.get("name", ""))
+            attempts.append(
+                {
+                    "attempt": attempt_name,
+                    "status": "not_evaluated",
+                    "evaluation_state": "pending_downstream_evidence",
+                    "reason": (
+                        "IX exported the cognition contract but did not execute "
+                        "or satisfy downstream cognition obligations."
+                    ),
+                    "human_authority_required": bool(
+                        attempt.get("human_approval_required", [])
+                    ),
+                    "obligations": [
+                        self._satisfaction_obligation_payload(obligation)
+                        for obligation in self._obligations(attempt)
+                    ],
+                }
+            )
+
+        return {
+            "schema_version": "1.0",
+            "report_type": "ix.cognition.satisfaction_report",
+            "runtime_semantics": metadata.get("runtime_semantics"),
+            "status": "not_evaluated",
+            "evaluation_state": "pending_downstream_evidence",
+            "attempts": attempts,
+        }
+
+    def _satisfaction_obligation_payload(self, obligation: dict[str, Any]) -> dict[str, Any]:
+        obligation_id = str(obligation.get("id", ""))
+        definition = get_cognition_obligation(obligation_id)
+        return {
+            "id": obligation_id,
+            "source": obligation.get("source"),
+            "canonical": definition is not None,
+            "status": "pending_downstream_evidence",
+            "satisfied": None,
+            "required_evidence": list(obligation.get("evidence_required", [])),
+            "received_evidence": [],
+            "declared_falsification_gates": list(obligation.get("falsify_if", [])),
+            "review_required": True,
+            "notes": (
+                "Satisfaction cannot be asserted by IX export alone. "
+                "Downstream measured evidence and human review are required."
+            ),
+        }
+
+    def _failure_report_payload(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        attempts: list[dict[str, Any]] = []
+
+        for attempt in self._attempts(metadata):
+            attempt_name = str(attempt.get("name", ""))
+            attempts.append(
+                {
+                    "attempt": attempt_name,
+                    "status": "not_evaluated",
+                    "evaluation_state": "pending_downstream_evidence",
+                    "claim_blocking_semantics": (
+                        "Any triggered falsification gate blocks advancement "
+                        "or AGI-candidate claims until human review resolves it."
+                    ),
+                    "failure_conditions": [
+                        self._failure_condition_payload(obligation, condition)
+                        for obligation in self._obligations(attempt)
+                        for condition in obligation.get("falsify_if", [])
+                    ],
+                }
+            )
+
+        return {
+            "schema_version": "1.0",
+            "report_type": "ix.cognition.failure_report",
+            "runtime_semantics": metadata.get("runtime_semantics"),
+            "status": "not_evaluated",
+            "evaluation_state": "pending_downstream_evidence",
+            "claim_blocking_semantics": (
+                "Falsification reports are claim-blocking once a listed gate "
+                "is triggered by downstream evidence."
+            ),
+            "attempts": attempts,
+        }
+
+    def _failure_condition_payload(
+        self,
+        obligation: dict[str, Any],
+        condition: Any,
+    ) -> dict[str, Any]:
+        return {
+            "obligation": obligation.get("id"),
+            "condition": condition,
+            "source": obligation.get("source"),
+            "triggered": None,
+            "status": "not_evaluated",
+            "claim_blocking": True,
+            "required_resolution": "human_review",
+            "notes": (
+                "IX exported this falsification gate but did not evaluate "
+                "whether it was triggered."
+            ),
+        }
+
+    def _report_obligation_count(self, report: dict[str, Any]) -> int:
+        return sum(
+            len(attempt.get("obligations", []))
+            for attempt in report.get("attempts", [])
+            if isinstance(attempt, dict)
+        )
+
+    def _report_failure_gate_count(self, report: dict[str, Any]) -> int:
+        return sum(
+            len(attempt.get("failure_conditions", []))
+            for attempt in report.get("attempts", [])
+            if isinstance(attempt, dict)
+        )
+
     def _attempts(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
         attempts = metadata.get("attempts", [])
         if not isinstance(attempts, list):
@@ -346,6 +488,8 @@ class EvidenceBundleWriter:
         contract_metadata = self._contract_metadata(result)
         contract_counts = self._contract_counts(contract_metadata)
         kernel_handoff_payload = self._kernel_handoff_payload(contract_metadata)
+        satisfaction_report = self._satisfaction_report_payload(contract_metadata)
+        failure_report = self._failure_report_payload(contract_metadata)
         return (
             "# IX Assurance Claims\n\n"
             "This evidence bundle supports only bounded, runtime-observed claims.\n\n"
@@ -360,11 +504,17 @@ class EvidenceBundleWriter:
             f"- Cognition attempt contracts captured: {contract_counts['attempts']}.\n"
             f"- Cognition obligations captured: {contract_counts['obligations']}.\n"
             f"- IX-CognitionKernel handoff packages captured: "
-            f"{len(kernel_handoff_payload['packages'])}.\n\n"
+            f"{len(kernel_handoff_payload['packages'])}.\n"
+            f"- Satisfaction report obligations listed: "
+            f"{self._report_obligation_count(satisfaction_report)}.\n"
+            f"- Failure report gates listed: "
+            f"{self._report_failure_gate_count(failure_report)}.\n\n"
             "## Not claimed\n\n"
             "- This bundle does not certify the script as safe, complete, lawful, or production-ready.\n"
             "- This bundle does not prove external system behavior beyond the deterministic IX runtime output.\n"
             "- This bundle does not execute or certify cognition-contract obligations.\n"
+            "- This bundle does not mark cognition obligations as satisfied.\n"
+            "- This bundle does not evaluate whether falsification gates were triggered.\n"
             "- This bundle does not certify AGI, AGI-candidate status, or deployment readiness.\n"
             "- This bundle does not grant IX-CognitionKernel execution authority.\n"
             "- This bundle does not replace human review.\n"
@@ -386,5 +536,8 @@ class EvidenceBundleWriter:
             "transfer, certify AGI, or authorize self-approval.\n\n"
             "IX-CognitionKernel handoff packages are reviewable contract packages only. They do "
             "not grant execution authority, deployment authority, self-modification authority, "
-            "or AGI-certification authority.\n"
+            "or AGI-certification authority.\n\n"
+            "Satisfaction and failure reports are schemas for downstream evidence review. They "
+            "start in `not_evaluated` state. IX export alone cannot mark obligations satisfied "
+            "and cannot decide whether falsification gates were triggered.\n"
         )
