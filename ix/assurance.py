@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast as py_ast
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -489,6 +490,7 @@ class AssuranceAnalyzer:
             )
         )
 
+        checks.extend(self._check_claim_boundary_language(attempt))
         checks.extend(self._check_handoff_contracts(attempt.name, handoffs))
 
         if obligations:
@@ -547,6 +549,164 @@ class AssuranceAnalyzer:
             f"Attempt `{attempt}` must declare at least one {label}.",
             {"attempt": attempt},
         )
+
+    def _check_claim_boundary_language(self, attempt: AttemptBlock) -> list[AssuranceCheck]:
+        non_goal_texts = [
+            self._contract_text(child.text)
+            for child in attempt.statements
+            if isinstance(child, NonGoalStatement)
+        ]
+        claim_boundary_texts = [
+            self._contract_text(child.text)
+            for child in attempt.statements
+            if isinstance(child, ClaimBoundaryStatement)
+        ]
+        review_texts = [
+            self._contract_text(child.reason)
+            for child in attempt.statements
+            if isinstance(child, RequireApprovalStatement)
+        ]
+        purpose_texts = [
+            self._contract_text(child.text)
+            for child in attempt.statements
+            if isinstance(child, PurposeStatement)
+        ]
+        all_boundary_texts = purpose_texts + non_goal_texts + claim_boundary_texts + review_texts
+
+        checks: list[AssuranceCheck] = []
+
+        if any(self._declares_agi_claim_restriction(text) for text in non_goal_texts):
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.agi_claim_restriction.present",
+                    "pass",
+                    f"Attempt `{attempt.name}` explicitly blocks AGI self-claiming.",
+                    {"attempt": attempt.name},
+                )
+            )
+        else:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.agi_claim_restriction.missing",
+                    "fail",
+                    f"Attempt `{attempt.name}` must include a non_goal blocking AGI claims.",
+                    {"attempt": attempt.name},
+                )
+            )
+
+        if any(self._declares_research_candidate_boundary(text) for text in claim_boundary_texts):
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.research_boundary.present",
+                    "pass",
+                    f"Attempt `{attempt.name}` is bounded as a research candidate.",
+                    {"attempt": attempt.name},
+                )
+            )
+        else:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.research_boundary.missing",
+                    "fail",
+                    f"Attempt `{attempt.name}` must declare a research-candidate claim boundary.",
+                    {"attempt": attempt.name},
+                )
+            )
+
+        prohibited = [
+            text
+            for text in all_boundary_texts
+            if self._contains_prohibited_agi_claim(text)
+        ]
+        if prohibited:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.prohibited_claim_language.present",
+                    "fail",
+                    f"Attempt `{attempt.name}` contains prohibited AGI-certification language.",
+                    {
+                        "attempt": attempt.name,
+                        "matched_text": prohibited,
+                    },
+                )
+            )
+        else:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.prohibited_claim_language.absent",
+                    "pass",
+                    f"Attempt `{attempt.name}` contains no self-certifying AGI language.",
+                    {"attempt": attempt.name},
+                )
+            )
+
+        return checks
+
+    def _contract_text(self, value: str) -> str:
+        stripped = value.strip()
+        try:
+            parsed = py_ast.literal_eval(stripped)
+        except (SyntaxError, ValueError):
+            parsed = stripped
+        if isinstance(parsed, str):
+            return " ".join(parsed.lower().split())
+        return " ".join(stripped.lower().split())
+
+    def _declares_agi_claim_restriction(self, text: str) -> bool:
+        if "agi" not in text:
+            return False
+        if not any(term in text for term in ("claim", "certif", "declare", "assert")):
+            return False
+        return self._is_denial_text(text)
+
+    def _declares_research_candidate_boundary(self, text: str) -> bool:
+        if "research candidate" in text:
+            return True
+        if "research" in text and "candidate" in text:
+            return True
+        if "research" in text and "not production" in text:
+            return True
+        if "evaluation" in text and "not deployment" in text:
+            return True
+        return "candidate only" in text
+
+    def _contains_prohibited_agi_claim(self, text: str) -> bool:
+        if self._is_denial_text(text):
+            return False
+
+        prohibited_patterns = (
+            "is agi",
+            "achieved agi",
+            "achieves agi",
+            "guarantees agi",
+            "guaranteed agi",
+            "certifies agi",
+            "certify agi",
+            "births agi",
+            "creates agi",
+            "proves agi",
+            "agi achieved",
+            "agi certified",
+            "agi guaranteed",
+        )
+        return any(pattern in text for pattern in prohibited_patterns)
+
+    def _is_denial_text(self, text: str) -> bool:
+        denial_terms = (
+            "do not",
+            "don't",
+            "must not",
+            "cannot",
+            "can't",
+            "no ",
+            "never",
+            "not ",
+            "forbid",
+            "forbidden",
+            "blocked",
+            "prohibit",
+        )
+        return any(term in text for term in denial_terms)
 
     def _check_handoff_contracts(
         self,
