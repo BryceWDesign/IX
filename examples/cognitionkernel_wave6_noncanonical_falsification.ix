@@ -1,0 +1,12 @@
+attempt wave6_noncanonical_falsification {
+    purpose "Define a Wave 6 contract with an intentionally noncanonical falsification gate"
+    non_goal "Do not claim AGI, certify AGI, or allow system self-approval"
+    claim_boundary "Research candidate only, evaluation use only, not deployment"
+    require human_approval reason "Human review required before any advancement or public claim"
+    handoff_contract IX-CognitionKernel schema ix.cognition.contract.v1
+
+    obligation prediction_before_trial {
+        evidence_required prediction_record
+        falsify_if arbitrary_failure_label
+    }
+}
