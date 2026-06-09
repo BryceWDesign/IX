@@ -1,7 +1,22 @@
 """IX public package surface."""
 
 from .assurance import AssuranceAnalyzer, AssuranceCheck, AssuranceReport, assess_ix
-from .ast import IfStatement, Program, SendStatement, ToolArgument, ToolCallStatement
+from .ast import (
+    AttemptBlock,
+    ClaimBoundaryStatement,
+    CognitionContractStatement,
+    EvidenceRequirementStatement,
+    FalsifyIfStatement,
+    HandoffContractStatement,
+    IfStatement,
+    NonGoalStatement,
+    ObligationBlock,
+    Program,
+    PurposeStatement,
+    SendStatement,
+    ToolArgument,
+    ToolCallStatement,
+)
 from .errors import IXError, IXSyntaxError, IXValidationError
 from .evidence import EvidenceBundle, EvidenceBundleWriter
 from .formatting import IXFormatError, IXFormatter, format_ix
@@ -16,11 +31,17 @@ __all__ = [
     "AssuranceAnalyzer",
     "AssuranceCheck",
     "AssuranceReport",
+    "AttemptBlock",
     "BuiltInToolRegistry",
+    "ClaimBoundaryStatement",
+    "CognitionContractStatement",
     "Diagnostic",
     "EvidenceBundle",
     "EvidenceBundleWriter",
+    "EvidenceRequirementStatement",
     "ExecutionResult",
+    "FalsifyIfStatement",
+    "HandoffContractStatement",
     "IXError",
     "IXFormatError",
     "IXFormatter",
@@ -32,7 +53,10 @@ __all__ = [
     "IXValidationError",
     "IXValidator",
     "IfStatement",
+    "NonGoalStatement",
+    "ObligationBlock",
     "Program",
+    "PurposeStatement",
     "SendStatement",
     "ToolArgument",
     "ToolCallStatement",
