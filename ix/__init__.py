@@ -1,6 +1,13 @@
 """IX public package surface."""
 
-from .assurance import AssuranceAnalyzer, AssuranceCheck, AssuranceReport, assess_ix
+from .assurance import (
+    AssuranceAnalyzer,
+    AssuranceCheck,
+    AssuranceProfile,
+    AssuranceProfileRegistry,
+    AssuranceReport,
+    assess_ix,
+)
 from .ast import (
     AttemptBlock,
     ClaimBoundaryStatement,
@@ -30,6 +37,8 @@ from .version import __version__
 __all__ = [
     "AssuranceAnalyzer",
     "AssuranceCheck",
+    "AssuranceProfile",
+    "AssuranceProfileRegistry",
     "AssuranceReport",
     "AttemptBlock",
     "BuiltInToolRegistry",
