@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .cognition import get_cognition_obligation
 from .runtime import ExecutionResult
 
 
@@ -44,6 +45,7 @@ class EvidenceBundleWriter:
         result_payload = result.to_dict()
         contract_metadata = self._contract_metadata(result)
         contract_counts = self._contract_counts(contract_metadata)
+        kernel_handoff_payload = self._kernel_handoff_payload(contract_metadata)
 
         artifact_files = [
             "summary.json",
@@ -57,6 +59,7 @@ class EvidenceBundleWriter:
             "obligations.json",
             "falsification-gates.json",
             "claim-boundaries.json",
+            "kernel-handoff.json",
             "outputs.txt",
             "replies.txt",
             "assurance-claims.md",
@@ -104,6 +107,9 @@ class EvidenceBundleWriter:
                         "contract_falsification_gates": contract_counts[
                             "falsification_gates"
                         ],
+                        "kernel_handoff_packages": len(
+                            kernel_handoff_payload["packages"]
+                        ),
                     },
                     "variables": result_payload["variables"],
                     "memory": result_payload["memory"],
@@ -135,6 +141,12 @@ class EvidenceBundleWriter:
             self._write_json(
                 output_dir / "claim-boundaries.json",
                 self._claim_boundaries_payload(contract_metadata),
+            )
+        )
+        files.append(
+            self._write_json(
+                output_dir / "kernel-handoff.json",
+                kernel_handoff_payload,
             )
         )
         files.append(self._write_text(output_dir / "outputs.txt", "\n".join(result.outputs) + "\n"))
@@ -233,6 +245,66 @@ class EvidenceBundleWriter:
             "attempts": attempts,
         }
 
+    def _kernel_handoff_payload(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        packages: list[dict[str, Any]] = []
+
+        for attempt in self._attempts(metadata):
+            attempt_name = str(attempt.get("name", ""))
+            target_handoffs = [
+                handoff
+                for handoff in self._handoff_contracts(attempt)
+                if handoff.get("target") == "IX-CognitionKernel"
+            ]
+
+            for handoff in target_handoffs:
+                packages.append(
+                    {
+                        "attempt": attempt_name,
+                        "target": "IX-CognitionKernel",
+                        "schema": handoff.get("schema"),
+                        "source": handoff.get("source"),
+                        "runtime_semantics": metadata.get("runtime_semantics"),
+                        "execution_authority": "none",
+                        "self_certification_allowed": False,
+                        "human_authority_required": bool(
+                            attempt.get("human_approval_required", [])
+                        ),
+                        "purpose": list(attempt.get("purpose", [])),
+                        "non_goals": list(attempt.get("non_goals", [])),
+                        "claim_boundaries": list(attempt.get("claim_boundaries", [])),
+                        "human_approval_required": list(
+                            attempt.get("human_approval_required", [])
+                        ),
+                        "obligations": [
+                            self._kernel_obligation_payload(obligation)
+                            for obligation in self._obligations(attempt)
+                        ],
+                    }
+                )
+
+        return {
+            "schema_version": "1.0",
+            "handoff_type": "ix.cognitionkernel.handoff",
+            "runtime_semantics": metadata.get("runtime_semantics"),
+            "packages": packages,
+        }
+
+    def _kernel_obligation_payload(self, obligation: dict[str, Any]) -> dict[str, Any]:
+        obligation_id = str(obligation.get("id", ""))
+        definition = get_cognition_obligation(obligation_id)
+        payload: dict[str, Any] = {
+            "id": obligation_id,
+            "source": obligation.get("source"),
+            "canonical": definition is not None,
+            "evidence_required": list(obligation.get("evidence_required", [])),
+            "falsify_if": list(obligation.get("falsify_if", [])),
+        }
+
+        if definition is not None:
+            payload["canonical_definition"] = definition.to_dict()
+
+        return payload
+
     def _attempts(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
         attempts = metadata.get("attempts", [])
         if not isinstance(attempts, list):
@@ -244,6 +316,16 @@ class EvidenceBundleWriter:
         if not isinstance(obligations, list):
             return []
         return [obligation for obligation in obligations if isinstance(obligation, dict)]
+
+    def _handoff_contracts(self, attempt: dict[str, Any]) -> list[dict[str, Any]]:
+        handoff_contracts = attempt.get("handoff_contracts", [])
+        if not isinstance(handoff_contracts, list):
+            return []
+        return [
+            handoff
+            for handoff in handoff_contracts
+            if isinstance(handoff, dict)
+        ]
 
     def _write_json(self, path: Path, payload: Any) -> Path:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -263,6 +345,7 @@ class EvidenceBundleWriter:
     def _claims_text(self, result: ExecutionResult) -> str:
         contract_metadata = self._contract_metadata(result)
         contract_counts = self._contract_counts(contract_metadata)
+        kernel_handoff_payload = self._kernel_handoff_payload(contract_metadata)
         return (
             "# IX Assurance Claims\n\n"
             "This evidence bundle supports only bounded, runtime-observed claims.\n\n"
@@ -275,12 +358,15 @@ class EvidenceBundleWriter:
             f"- Conditional branches captured: {len(result.branches)}.\n"
             f"- Human approval requirements captured: {len(result.approvals_required)}.\n"
             f"- Cognition attempt contracts captured: {contract_counts['attempts']}.\n"
-            f"- Cognition obligations captured: {contract_counts['obligations']}.\n\n"
+            f"- Cognition obligations captured: {contract_counts['obligations']}.\n"
+            f"- IX-CognitionKernel handoff packages captured: "
+            f"{len(kernel_handoff_payload['packages'])}.\n\n"
             "## Not claimed\n\n"
             "- This bundle does not certify the script as safe, complete, lawful, or production-ready.\n"
             "- This bundle does not prove external system behavior beyond the deterministic IX runtime output.\n"
             "- This bundle does not execute or certify cognition-contract obligations.\n"
             "- This bundle does not certify AGI, AGI-candidate status, or deployment readiness.\n"
+            "- This bundle does not grant IX-CognitionKernel execution authority.\n"
             "- This bundle does not replace human review.\n"
         )
 
@@ -297,5 +383,8 @@ class EvidenceBundleWriter:
             "Cognition-contract artifacts are declarative metadata. They record the contract, "
             "obligations, claim boundaries, and falsification gates that a downstream cognition "
             "system may later attempt. They do not execute cognition, prove learning, prove "
-            "transfer, certify AGI, or authorize self-approval.\n"
+            "transfer, certify AGI, or authorize self-approval.\n\n"
+            "IX-CognitionKernel handoff packages are reviewable contract packages only. They do "
+            "not grant execution authority, deployment authority, self-modification authority, "
+            "or AGI-certification authority.\n"
         )
