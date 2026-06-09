@@ -19,12 +19,20 @@ from typing import Any
 from .ast import (
     AgentBlock,
     AssertStatement,
+    AttemptBlock,
+    ClaimBoundaryStatement,
+    EvidenceRequirementStatement,
+    FalsifyIfStatement,
+    HandoffContractStatement,
     IfStatement,
     LetStatement,
+    NonGoalStatement,
+    ObligationBlock,
     OnBlock,
     PolicyStatement,
     PrintStatement,
     Program,
+    PurposeStatement,
     RecallStatement,
     RememberStatement,
     ReplyStatement,
@@ -85,6 +93,7 @@ class ExecutionResult:
     handoffs: list[dict[str, Any]] = field(default_factory=list)
     branches: list[dict[str, Any]] = field(default_factory=list)
     trace: list[TraceEvent] = field(default_factory=list)
+    contract_metadata: dict[str, Any] = field(default_factory=dict)
 
     def trace_as_dicts(self) -> list[dict[str, Any]]:
         """Return the trace ledger in JSON-serializable form."""
@@ -105,6 +114,7 @@ class ExecutionResult:
             "tool_results": list(self.tool_results),
             "handoffs": list(self.handoffs),
             "branches": list(self.branches),
+            "contract_metadata": dict(self.contract_metadata),
             "trace": self.trace_as_dicts(),
         }
 
@@ -210,10 +220,27 @@ class IXRuntime:
             joined = "\n".join(diagnostic.format() for diagnostic in diagnostics)
             raise IXRuntimeError(f"IX validation failed:\n{joined}")
 
-        result = ExecutionResult(status="running")
+        result = ExecutionResult(
+            status="running",
+            contract_metadata=self._contract_metadata(program),
+        )
         values: dict[str, Any] = dict(inputs or {})
         statements = self._select_statements(program, agent=agent, event=event)
         self._emit(result, "run.start", "IX execution started", program.span)
+
+        if result.contract_metadata["counts"]["attempts"] > 0:
+            self._emit(
+                result,
+                "contract.metadata",
+                "Cognition contract metadata extracted; no cognition executed",
+                program.span,
+                counts=result.contract_metadata["counts"],
+                attempts=[
+                    attempt["name"]
+                    for attempt in result.contract_metadata["attempts"]
+                ],
+            )
+
         self._run_statements(program, statements, values, result, depth=0, inherited_policies=())
         result.variables = dict(values)
         result.status = "completed"
@@ -245,7 +272,7 @@ class IXRuntime:
         if agent is None and event is None:
             selected: list[Statement] = []
             for statement in program.statements:
-                if not isinstance(statement, AgentBlock):
+                if not isinstance(statement, AgentBlock | AttemptBlock):
                     selected.append(statement)
             return tuple(selected)
 
@@ -266,6 +293,110 @@ class IXRuntime:
 
     def _collect_policies(self, statements: tuple[Statement, ...]) -> tuple[PolicyStatement, ...]:
         return tuple(statement for statement in statements if isinstance(statement, PolicyStatement))
+
+    def _contract_metadata(self, program: Program) -> dict[str, Any]:
+        attempts = [
+            self._attempt_metadata(statement)
+            for statement in program.statements
+            if isinstance(statement, AttemptBlock)
+        ]
+        obligation_count = sum(len(attempt["obligations"]) for attempt in attempts)
+        evidence_count = sum(
+            len(obligation["evidence_required"])
+            for attempt in attempts
+            for obligation in attempt["obligations"]
+        )
+        falsification_count = sum(
+            len(obligation["falsify_if"])
+            for attempt in attempts
+            for obligation in attempt["obligations"]
+        )
+
+        return {
+            "contract_type": "ix.cognition.contracts",
+            "schema_version": "1.0",
+            "runtime_semantics": "metadata_only_not_executed",
+            "counts": {
+                "attempts": len(attempts),
+                "obligations": obligation_count,
+                "evidence_requirements": evidence_count,
+                "falsification_gates": falsification_count,
+            },
+            "attempts": attempts,
+        }
+
+    def _attempt_metadata(self, attempt: AttemptBlock) -> dict[str, Any]:
+        purposes: list[str] = []
+        non_goals: list[str] = []
+        claim_boundaries: list[str] = []
+        approvals: list[str] = []
+        handoff_contracts: list[dict[str, Any]] = []
+        obligations: list[dict[str, Any]] = []
+
+        for statement in attempt.statements:
+            if isinstance(statement, PurposeStatement):
+                purposes.append(self._contract_text(statement.text))
+            elif isinstance(statement, NonGoalStatement):
+                non_goals.append(self._contract_text(statement.text))
+            elif isinstance(statement, ClaimBoundaryStatement):
+                claim_boundaries.append(self._contract_text(statement.text))
+            elif isinstance(statement, RequireApprovalStatement):
+                approvals.append(self._contract_text(statement.reason))
+            elif isinstance(statement, HandoffContractStatement):
+                handoff_contracts.append(
+                    {
+                        "target": statement.target,
+                        "schema": statement.schema_name,
+                        "source": self._span_dict(statement.span),
+                    }
+                )
+            elif isinstance(statement, ObligationBlock):
+                obligations.append(self._obligation_metadata(statement))
+
+        return {
+            "name": attempt.name,
+            "source": self._span_dict(attempt.span),
+            "purpose": purposes,
+            "non_goals": non_goals,
+            "claim_boundaries": claim_boundaries,
+            "human_approval_required": approvals,
+            "handoff_contracts": handoff_contracts,
+            "obligations": obligations,
+        }
+
+    def _obligation_metadata(self, obligation: ObligationBlock) -> dict[str, Any]:
+        evidence_required: list[str] = []
+        falsify_if: list[str] = []
+
+        for statement in obligation.statements:
+            if isinstance(statement, EvidenceRequirementStatement):
+                evidence_required.append(statement.artifact)
+            elif isinstance(statement, FalsifyIfStatement):
+                falsify_if.append(statement.condition)
+
+        return {
+            "id": obligation.identifier,
+            "source": self._span_dict(obligation.span),
+            "evidence_required": evidence_required,
+            "falsify_if": falsify_if,
+        }
+
+    def _contract_text(self, value: str) -> str:
+        stripped = value.strip()
+        try:
+            parsed = py_ast.literal_eval(stripped)
+        except (SyntaxError, ValueError):
+            parsed = stripped
+        if isinstance(parsed, str):
+            return parsed
+        return stripped
+
+    def _span_dict(self, span: SourceSpan) -> dict[str, Any]:
+        return {
+            "filename": span.filename,
+            "line": span.line,
+            "column": span.column,
+        }
 
     def _execute_statement(
         self,
