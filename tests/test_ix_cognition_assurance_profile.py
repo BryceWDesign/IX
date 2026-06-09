@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ix.assurance import AssuranceProfileRegistry, assess_ix
 from ix.cli import main
-from ix.cognition import cognition_obligation_ids
+from ix.cognition import cognition_obligation_ids, require_cognition_obligation
 from ix.parser import parse_ix
 
 
@@ -19,8 +19,10 @@ def build_cognition_contract(
     claim_boundary: str = "Research candidate only",
     human_review: str = "Human review required before advancement",
     handoff_target: str = "IX-CognitionKernel",
+    falsification_overrides: dict[str, str] | None = None,
 ) -> str:
     selected_obligations = obligation_ids or cognition_obligation_ids()
+    overrides = falsification_overrides or {}
     lines = [
         "attempt wave6_measured_cognition {",
         f'    purpose "{purpose}"',
@@ -32,11 +34,16 @@ def build_cognition_contract(
     ]
 
     for obligation_id in selected_obligations:
+        definition = require_cognition_obligation(obligation_id)
+        falsification_condition = overrides.get(
+            obligation_id,
+            definition.falsification_conditions[0],
+        )
         lines.extend(
             [
                 f"    obligation {obligation_id} {{",
-                f"        evidence_required {obligation_id}_record",
-                f"        falsify_if {obligation_id}_missing",
+                f"        evidence_required {definition.evidence_artifacts[0]}",
+                f"        falsify_if {falsification_condition}",
                 "    }",
                 "",
             ]
@@ -123,6 +130,10 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.obligations.canonical", check_ids)
         self.assertIn("cognition_contract.obligation_evidence.present", check_ids)
         self.assertIn("cognition_contract.obligation_falsification.present", check_ids)
+        self.assertIn(
+            "cognition_contract.obligation_canonical_falsification.present",
+            check_ids,
+        )
 
     def test_cognition_profile_fails_missing_core_contract_parts(self):
         program = parse_ix(
@@ -148,6 +159,10 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.handoff_contract.missing", check_ids)
         self.assertIn("cognition_contract.required_obligations.missing", check_ids)
         self.assertIn("cognition_contract.obligation_falsification.missing", check_ids)
+        self.assertIn(
+            "cognition_contract.obligation_canonical_falsification.missing",
+            check_ids,
+        )
 
     def test_cognition_profile_fails_missing_required_obligations(self):
         incomplete_ids = tuple(
@@ -187,6 +202,37 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.obligations.unknown", check_ids)
         self.assertEqual(len(unknown_checks), 1)
         self.assertIn("custom_gap_label", unknown_checks[0].data["unknown_obligations"])
+
+    def test_cognition_profile_fails_noncanonical_falsification_gate(self):
+        program = parse_ix(
+            build_cognition_contract(
+                falsification_overrides={
+                    "prediction_before_trial": "arbitrary_failure_label",
+                }
+            )
+        )
+
+        report = assess_ix(program, profile="cognitionkernel-wave6")
+        check_ids = {check.check_id for check in report.checks}
+        missing_checks = [
+            check
+            for check in report.checks
+            if check.check_id
+            == "cognition_contract.obligation_canonical_falsification.missing"
+        ]
+
+        self.assertEqual(report.status, "fail")
+        self.assertIn(
+            "cognition_contract.obligation_canonical_falsification.missing",
+            check_ids,
+        )
+        self.assertEqual(len(missing_checks), 1)
+        self.assertEqual(missing_checks[0].data["obligation"], "prediction_before_trial")
+        self.assertEqual(
+            missing_checks[0].data["declared_conditions"],
+            ["arbitrary_failure_label"],
+        )
+        self.assertIn("prediction_missing", missing_checks[0].data["canonical_conditions"])
 
     def test_cognition_profile_fails_missing_agi_claim_restriction(self):
         program = parse_ix(
@@ -302,6 +348,10 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertIn("cognition_contract.attempt_present", check_ids)
         self.assertIn("cognition_contract.required_obligations.present", check_ids)
         self.assertIn("cognition_contract.prohibited_claim_language.absent", check_ids)
+        self.assertIn(
+            "cognition_contract.obligation_canonical_falsification.present",
+            check_ids,
+        )
 
     def test_cli_assure_execute_fails_closed_for_cognition_profile(self):
         ix_file = self._write_ix(VALID_COGNITION_CONTRACT)
