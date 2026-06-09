@@ -7,7 +7,11 @@ from pathlib import Path
 
 from ix.assurance import AssuranceProfileRegistry, assess_ix
 from ix.cli import main
-from ix.cognition import cognition_obligation_ids, require_cognition_obligation
+from ix.cognition import (
+    cognition_obligation_ids,
+    get_cognition_obligation,
+    require_cognition_obligation,
+)
 from ix.parser import parse_ix
 
 
@@ -34,15 +38,22 @@ def build_cognition_contract(
     ]
 
     for obligation_id in selected_obligations:
-        definition = require_cognition_obligation(obligation_id)
-        falsification_condition = overrides.get(
-            obligation_id,
-            definition.falsification_conditions[0],
+        definition = get_cognition_obligation(obligation_id)
+        evidence_artifact = (
+            definition.evidence_artifacts[0]
+            if definition is not None
+            else f"{obligation_id}_record"
         )
+        default_falsification = (
+            definition.falsification_conditions[0]
+            if definition is not None
+            else f"{obligation_id}_missing"
+        )
+        falsification_condition = overrides.get(obligation_id, default_falsification)
         lines.extend(
             [
                 f"    obligation {obligation_id} {{",
-                f"        evidence_required {definition.evidence_artifacts[0]}",
+                f"        evidence_required {evidence_artifact}",
                 f"        falsify_if {falsification_condition}",
                 "    }",
                 "",
@@ -89,7 +100,10 @@ class TestIXCognitionAssuranceProfile(unittest.TestCase):
         self.assertNotIn("program.no_executable_path", check_ids)
 
     def test_cognition_profile_requires_attempt_contract_not_loose_statements(self):
-        report = assess_ix(parse_ix('trace "static contract marker"'), profile="cognitionkernel-wave6")
+        report = assess_ix(
+            parse_ix('trace "static contract marker"'),
+            profile="cognitionkernel-wave6",
+        )
         check_ids = {check.check_id for check in report.checks}
 
         self.assertEqual(report.status, "fail")
