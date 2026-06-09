@@ -32,6 +32,7 @@ class AssuranceProfile:
 
     name: str
     description: str
+    require_non_empty_program: bool = False
     require_executable_path: bool = True
     check_tool_policies: bool = True
     check_handoff_targets: bool = True
@@ -47,6 +48,7 @@ class AssuranceProfile:
         return {
             "name": self.name,
             "description": self.description,
+            "require_non_empty_program": self.require_non_empty_program,
             "require_executable_path": self.require_executable_path,
             "check_tool_policies": self.check_tool_policies,
             "check_handoff_targets": self.check_handoff_targets,
@@ -62,15 +64,7 @@ class AssuranceProfileRegistry:
     """Registry of supported assurance profiles."""
 
     def __init__(self, profiles: tuple[AssuranceProfile, ...] | None = None) -> None:
-        configured_profiles = profiles or (
-            AssuranceProfile(
-                name="experimental-local",
-                description=(
-                    "Default local IX assurance profile for deterministic, "
-                    "evidence-bound development checks."
-                ),
-            ),
-        )
+        configured_profiles = profiles or default_assurance_profiles()
         self._profiles = {profile.name: profile for profile in configured_profiles}
 
     def get(self, name: str) -> AssuranceProfile | None:
@@ -186,6 +180,25 @@ class AssuranceAnalyzer:
                     },
                 )
             )
+
+        if active_profile.require_non_empty_program:
+            if not program.statements:
+                checks.append(
+                    AssuranceCheck(
+                        "program.empty",
+                        "fail",
+                        "Assurance profile requires at least one declared IX statement.",
+                    )
+                )
+            else:
+                checks.append(
+                    AssuranceCheck(
+                        "program.non_empty",
+                        "pass",
+                        "Program contains declared IX statements for profile review.",
+                        {"top_level_statements": len(program.statements)},
+                    )
+                )
 
         if active_profile.require_executable_path:
             if metrics["executable_paths"] == 0:
@@ -611,6 +624,37 @@ class AssuranceAnalyzer:
             return "warn"
 
         return "pass"
+
+
+def default_assurance_profiles() -> tuple[AssuranceProfile, ...]:
+    """Return the built-in assurance profiles in stable order."""
+
+    return (
+        AssuranceProfile(
+            name="experimental-local",
+            description=(
+                "Default local IX assurance profile for deterministic, "
+                "evidence-bound development checks."
+            ),
+        ),
+        AssuranceProfile(
+            name="cognitionkernel-wave6",
+            description=(
+                "Static cognition-contract review profile for governed "
+                "IX-CognitionKernel AGI-candidate attempts. This profile "
+                "does not execute contracts and does not certify AGI status."
+            ),
+            require_non_empty_program=True,
+            require_executable_path=False,
+            check_tool_policies=False,
+            check_handoff_targets=False,
+            check_condition_markers=False,
+            check_assertions=False,
+            check_trace_statements=False,
+            check_human_review=False,
+            allow_runtime_execution=False,
+        ),
+    )
 
 
 def assess_ix(
