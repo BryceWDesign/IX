@@ -5,12 +5,20 @@ from __future__ import annotations
 from .ast import (
     AgentBlock,
     AssertStatement,
+    AttemptBlock,
+    ClaimBoundaryStatement,
+    EvidenceRequirementStatement,
+    FalsifyIfStatement,
+    HandoffContractStatement,
     IfStatement,
     LetStatement,
+    NonGoalStatement,
+    ObligationBlock,
     OnBlock,
     PolicyStatement,
     PrintStatement,
     Program,
+    PurposeStatement,
     RecallStatement,
     RememberStatement,
     ReplyStatement,
@@ -38,7 +46,7 @@ class IXFormatter:
 
         lines: list[str] = []
         for index, statement in enumerate(program.statements):
-            if index > 0 and isinstance(statement, AgentBlock):
+            if index > 0 and isinstance(statement, AgentBlock | AttemptBlock):
                 lines.append("")
             lines.extend(self._format_statement(statement, depth=0))
         return "\n".join(lines).rstrip() + "\n"
@@ -98,6 +106,27 @@ class IXFormatter:
                 line = f"{line} with {arguments}"
             return [line]
 
+        if isinstance(statement, PurposeStatement):
+            return [f"{prefix}purpose {statement.text}"]
+
+        if isinstance(statement, NonGoalStatement):
+            return [f"{prefix}non_goal {statement.text}"]
+
+        if isinstance(statement, ClaimBoundaryStatement):
+            return [f"{prefix}claim_boundary {statement.text}"]
+
+        if isinstance(statement, EvidenceRequirementStatement):
+            return [f"{prefix}evidence_required {statement.artifact}"]
+
+        if isinstance(statement, FalsifyIfStatement):
+            return [f"{prefix}falsify_if {statement.condition}"]
+
+        if isinstance(statement, HandoffContractStatement):
+            line = f"{prefix}handoff_contract {statement.target}"
+            if statement.schema_name is not None:
+                line = f"{line} schema {statement.schema_name}"
+            return [line]
+
         if isinstance(statement, IfStatement):
             lines = [f"{prefix}if {statement.condition} {{"]
             for child in statement.then_statements:
@@ -106,6 +135,22 @@ class IXFormatter:
                 lines.append(f"{prefix}}} else {{")
                 for child in statement.else_statements:
                     lines.extend(self._format_statement(child, depth=depth + 1))
+            lines.append(f"{prefix}}}")
+            return lines
+
+        if isinstance(statement, ObligationBlock):
+            lines = [f"{prefix}obligation {statement.identifier} {{"]
+            for child in statement.statements:
+                lines.extend(self._format_statement(child, depth=depth + 1))
+            lines.append(f"{prefix}}}")
+            return lines
+
+        if isinstance(statement, AttemptBlock):
+            lines = [f"{prefix}attempt {statement.name} {{"]
+            for child_index, child in enumerate(statement.statements):
+                if child_index > 0 and isinstance(child, ObligationBlock):
+                    lines.append("")
+                lines.extend(self._format_statement(child, depth=depth + 1))
             lines.append(f"{prefix}}}")
             return lines
 
