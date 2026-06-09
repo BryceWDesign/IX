@@ -19,13 +19,14 @@ class TestIXAssuranceProfiles(unittest.TestCase):
     def test_default_registry_exposes_experimental_local_profile(self):
         registry = AssuranceProfileRegistry()
 
-        self.assertEqual(registry.names(), ("experimental-local",))
+        self.assertIn("experimental-local", registry.names())
         profile = registry.require("experimental-local")
         self.assertEqual(profile.name, "experimental-local")
         self.assertTrue(profile.require_executable_path)
         self.assertTrue(profile.check_tool_policies)
         self.assertTrue(profile.check_handoff_targets)
         self.assertTrue(profile.allow_runtime_execution)
+        self.assertFalse(profile.check_cognition_contract)
 
     def test_assessment_records_selected_profile(self):
         program = parse_ix(
