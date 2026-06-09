@@ -27,6 +27,7 @@ from .ast import (
     ToolCallStatement,
     TraceStatement,
 )
+from .cognition import cognition_obligation_ids, get_cognition_obligation
 from .runtime import IXRuntime, IXRuntimeError
 from .tools import BuiltInToolRegistry
 from .validator import validate_ix
@@ -512,6 +513,13 @@ class AssuranceAnalyzer:
                 )
             )
 
+        checks.extend(
+            self._check_required_obligation_coverage(
+                attempt_name=attempt.name,
+                obligations=obligations,
+            )
+        )
+
         for obligation in obligations:
             checks.extend(self._check_one_obligation(attempt.name, obligation))
 
@@ -580,6 +588,80 @@ class AssuranceAnalyzer:
                     "fail",
                     f"Attempt `{attempt_name}` must hand off to IX-CognitionKernel.",
                     {"attempt": attempt_name},
+                )
+            )
+
+        return checks
+
+    def _check_required_obligation_coverage(
+        self,
+        *,
+        attempt_name: str,
+        obligations: list[ObligationBlock],
+    ) -> list[AssuranceCheck]:
+        declared = [obligation.identifier for obligation in obligations]
+        declared_set = set(declared)
+        required = cognition_obligation_ids()
+        missing = tuple(identifier for identifier in required if identifier not in declared_set)
+        unknown = tuple(
+            dict.fromkeys(
+                identifier
+                for identifier in declared
+                if get_cognition_obligation(identifier) is None
+            )
+        )
+
+        checks: list[AssuranceCheck] = []
+
+        if missing:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.required_obligations.missing",
+                    "fail",
+                    f"Attempt `{attempt_name}` is missing required cognition obligations.",
+                    {
+                        "attempt": attempt_name,
+                        "missing_obligations": list(missing),
+                        "required_obligations": list(required),
+                        "declared_obligations": declared,
+                    },
+                )
+            )
+        else:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.required_obligations.present",
+                    "pass",
+                    f"Attempt `{attempt_name}` declares all required cognition obligations.",
+                    {
+                        "attempt": attempt_name,
+                        "required_obligations": list(required),
+                    },
+                )
+            )
+
+        if unknown:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.obligations.unknown",
+                    "fail",
+                    f"Attempt `{attempt_name}` declares unknown cognition obligations.",
+                    {
+                        "attempt": attempt_name,
+                        "unknown_obligations": list(unknown),
+                    },
+                )
+            )
+        elif declared:
+            checks.append(
+                AssuranceCheck(
+                    "cognition_contract.obligations.canonical",
+                    "pass",
+                    f"Attempt `{attempt_name}` uses canonical cognition obligation identifiers.",
+                    {
+                        "attempt": attempt_name,
+                        "declared_obligations": declared,
+                    },
                 )
             )
 
