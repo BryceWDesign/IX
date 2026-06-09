@@ -832,27 +832,89 @@ class AssuranceAnalyzer:
         attempt_name: str,
         obligation: ObligationBlock,
     ) -> list[AssuranceCheck]:
-        evidence_count = sum(
-            isinstance(child, EvidenceRequirementStatement) for child in obligation.statements
-        )
-        falsification_count = sum(
-            isinstance(child, FalsifyIfStatement) for child in obligation.statements
-        )
-        return [
+        evidence_requirements = [
+            child.artifact
+            for child in obligation.statements
+            if isinstance(child, EvidenceRequirementStatement)
+        ]
+        falsification_conditions = [
+            child.condition
+            for child in obligation.statements
+            if isinstance(child, FalsifyIfStatement)
+        ]
+
+        checks = [
             self._obligation_presence_check(
-                count=evidence_count,
+                count=len(evidence_requirements),
                 check_id="cognition_contract.obligation_evidence",
                 label="evidence requirement",
                 attempt=attempt_name,
                 obligation=obligation.identifier,
             ),
             self._obligation_presence_check(
-                count=falsification_count,
+                count=len(falsification_conditions),
                 check_id="cognition_contract.obligation_falsification",
                 label="falsification gate",
                 attempt=attempt_name,
                 obligation=obligation.identifier,
             ),
+        ]
+
+        checks.extend(
+            self._check_canonical_falsification_gate(
+                attempt_name=attempt_name,
+                obligation=obligation,
+                declared_conditions=falsification_conditions,
+            )
+        )
+        return checks
+
+    def _check_canonical_falsification_gate(
+        self,
+        *,
+        attempt_name: str,
+        obligation: ObligationBlock,
+        declared_conditions: list[str],
+    ) -> list[AssuranceCheck]:
+        definition = get_cognition_obligation(obligation.identifier)
+        if definition is None:
+            return []
+
+        declared_set = set(declared_conditions)
+        required_set = set(definition.falsification_conditions)
+        matched = tuple(
+            condition
+            for condition in definition.falsification_conditions
+            if condition in declared_set
+        )
+
+        if matched:
+            return [
+                AssuranceCheck(
+                    "cognition_contract.obligation_canonical_falsification.present",
+                    "pass",
+                    f"Obligation `{obligation.identifier}` declares canonical falsification gate(s).",
+                    {
+                        "attempt": attempt_name,
+                        "obligation": obligation.identifier,
+                        "matched_conditions": list(matched),
+                        "canonical_conditions": list(definition.falsification_conditions),
+                    },
+                )
+            ]
+
+        return [
+            AssuranceCheck(
+                "cognition_contract.obligation_canonical_falsification.missing",
+                "fail",
+                f"Obligation `{obligation.identifier}` must include at least one canonical falsification gate.",
+                {
+                    "attempt": attempt_name,
+                    "obligation": obligation.identifier,
+                    "declared_conditions": declared_conditions,
+                    "canonical_conditions": list(required_set),
+                },
+            )
         ]
 
     def _obligation_presence_check(
