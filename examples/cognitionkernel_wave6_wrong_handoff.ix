@@ -1,0 +1,12 @@
+attempt wave6_wrong_handoff {
+    purpose "Define a Wave 6 contract with an intentionally wrong handoff target"
+    non_goal "Do not claim AGI, certify AGI, or allow system self-approval"
+    claim_boundary "Research candidate only, evaluation use only, not deployment"
+    require human_approval reason "Human review required before any advancement or public claim"
+    handoff_contract OtherKernel schema ix.cognition.contract.v1
+
+    obligation prediction_before_trial {
+        evidence_required prediction_record
+        falsify_if prediction_missing
+    }
+}
